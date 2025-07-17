@@ -1,0 +1,9 @@
+quimb>=1.4.0
+numpy>=1.20.0
+scipy>=1.7.0
+qiskit>=1.0.0
+qiskit-aer>=0.13.0
+qiskit-ibm-runtime>=0.20.0
+matplotlib>=3.5.0
+tqdm>=4.60.0
+pylatexenc>=2.0 
