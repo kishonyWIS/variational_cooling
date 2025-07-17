@@ -234,4 +234,8 @@ $RECYCLE.BIN/
 
 # Project-specific files
 *.csv
-!requirements.txt 
+!requirements.txt
+
+# Generated directories
+jobs/
+plots/ 

@@ -149,7 +149,7 @@ def hva_multiple_sweeps(p, system_qubits, bath_qubits, parameters, num_sweeps=1,
 def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qubits=5, half=True, open_boundary=1, 
                            J=0.4, h=0.6, p=3, num_sweeps=1, 
                            single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
-                           max_timeout_minutes=30, max_bond_dim=256,
+                           max_timeout_minutes=30, max_bond_dim=256, min_bond_dim=8,
                            training_method="energy", initial_state="zeros", verbose=True, csv_file=None):
     """
     Adaptively adjust bond dimension to reach target precision for E-E0.
@@ -260,7 +260,7 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
     combined_stds = []
     
     start_time = time.time()
-    current_bond_dim = 1 # Start with small bond dimension
+    current_bond_dim = min_bond_dim # Start with minimum bond dimension
     converged = False
     dominant_variance = "truncation"
     
@@ -393,9 +393,10 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
             'single_qubit_gate_noise': single_qubit_gate_noise,
             'two_qubit_gate_noise': two_qubit_gate_noise,
             'initial_state': initial_state,
-            'energy_density_atol': energy_density_atol,
-            'max_bond_dim': max_bond_dim,
-            'ground_state_energy': E0,
+                    'energy_density_atol': energy_density_atol,
+        'max_bond_dim': max_bond_dim,
+        'min_bond_dim': min_bond_dim,
+        'ground_state_energy': E0,
             'final_energy': energies[-1],
             'final_bond_dim': bond_dimensions[-1],
             'final_combined_std': combined_stds[-1],
@@ -619,6 +620,7 @@ def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
                 'initial_state': params.get('initial_state', 'N/A'),
                 'energy_density_atol': params.get('energy_density_atol', 'N/A'),
                 'max_bond_dim': params.get('max_bond_dim', 'N/A'),
+                'min_bond_dim': params.get('min_bond_dim', 'N/A'),
                 'ground_state_energy': 'ERROR',
                 'final_energy': 'ERROR',
                 'final_bond_dim': 'ERROR',
@@ -636,47 +638,96 @@ def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
 # Example parameter sets for cluster execution
 def create_example_parameter_sets():
     """
-    Create example parameter sets for testing.
-    Modify this function to generate your desired parameter combinations.
+    Create parameter sets for variational cooling study.
     """
+    import numpy as np
+    
     parameter_sets = []
     
-    # Example: vary system size
-    # TODO: choose system size (system_qubits, bath_qubits)
-    # TODO: choose number of sweeps (num_sweeps)
-    # TODO: choose J, h
-    # TODO: choose noise level (scale up single_qubit_gate_noise and two_qubit_gate_noise by the same factor)
-    # TODO: choose training method (energy or mpo_fidelity)
-    for system_qubits, bath_qubits in [(10, 5), (20, 10)]:
-        for num_sweeps in [1, 2, 3]:
-            parameter_sets.append({
-                'energy_density_atol': 0.01,
-                'system_qubits': system_qubits,
-                'bath_qubits': bath_qubits,
-                'J': 0.4,
-                'h': 0.6,
-                'p': 3,
-                'num_sweeps': num_sweeps,
-                'single_qubit_gate_noise': 0.0003,
-                'two_qubit_gate_noise': 0.003,
-                'max_timeout_minutes': 30,
-                'max_bond_dim': 64,
-                'training_method': 'energy',
-                'initial_state': 'zeros'
-                # verbose is passed separately in run_parameter_sweep()
-            })
+    # System sizes: [4+2, 8+4, 14+7, 28+14] (system_qubits+bath_qubits)
+    system_sizes = [(4, 2), (8, 4), (14, 7), (28, 14)]
+    
+    # Number of sweeps: [0,1,2,3,4,5,6,7,8]
+    num_sweeps_list = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    
+    # J, h: [(0.4,0.6)]
+    J, h = 0.4, 0.6
+    
+    # Noise levels: (0.001, 0.01) x [linspace(0, 1, 11)]
+    noise_factors = np.linspace(0, 1, 11)
+    base_single_qubit_noise = 0.001
+    base_two_qubit_noise = 0.01
+    
+    # Generate all combinations
+    # Reordered loops to prioritize system sizes and sweep counts for better load balancing
+    for noise_factor in noise_factors:
+        for system_qubits, bath_qubits in system_sizes:
+            for num_sweeps in num_sweeps_list:
+                parameter_sets.append({
+                    'energy_density_atol': 0.01,
+                    'system_qubits': system_qubits,
+                    'bath_qubits': bath_qubits,
+                    'J': J,
+                    'h': h,
+                    'p': 3,
+                    'num_sweeps': num_sweeps,
+                    'single_qubit_gate_noise': base_single_qubit_noise * noise_factor,
+                    'two_qubit_gate_noise': base_two_qubit_noise * noise_factor,
+                    'max_timeout_minutes': 30,
+                    'max_bond_dim': 64,
+                    'min_bond_dim': 8,
+                    'training_method': 'energy',
+                    'initial_state': 'zeros'
+                })
     
     return parameter_sets
 
 
 if __name__ == "__main__":
+    import argparse
+    import json
+    
     # Set matplotlib to use LaTeX for better formatting
     plt.rcParams['text.usetex'] = True
     plt.rcParams['font.size'] = 12
     plt.rcParams['figure.dpi'] = 150
     
-    # Option 1: Original sweep convergence study (verbose with plots)
-    if False:  # Set to True to run the original study
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Variational cooling MPS simulation')
+    parser.add_argument('--job-id', type=int, help='Job ID for cluster execution')
+    parser.add_argument('--param-file', type=str, help='JSON file containing parameter sets')
+    parser.add_argument('--output-dir', type=str, default='results', help='Output directory for results')
+    parser.add_argument('--shared-csv', type=str, help='Shared CSV file for all jobs (thread-safe)')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose output and plots')
+    parser.add_argument('--sweep-study', action='store_true', help='Run sweep convergence study instead of parameter sweep')
+    
+    args = parser.parse_args()
+    
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    if args.job_id is not None and args.param_file is not None:
+        # Cluster job mode: run specific parameter sets from file
+        print(f"Running cluster job {args.job_id} with parameters from {args.param_file}")
+        
+        # Load parameter sets from file
+        with open(args.param_file, 'r') as f:
+            parameter_sets = json.load(f)
+        
+        # Use shared CSV file if specified, otherwise job-specific
+        if args.shared_csv:
+            csv_file = args.shared_csv
+        else:
+            csv_file = os.path.join(args.output_dir, f"results_job_{args.job_id:03d}.csv")
+        
+        # Run parameter sweep for this job
+        run_parameter_sweep(csv_file, parameter_sets, verbose=args.verbose)
+        
+        print(f"Job {args.job_id} completed. Results saved to {csv_file}")
+        
+    elif args.sweep_study:
+        # Option 1: Original sweep convergence study (verbose with plots)
+        print("Running sweep convergence study...")
         sweep_counts, final_energies, final_energy_diffs, final_combined_stds, final_bond_dims, converged_status = sweep_convergence_study(
             max_sweeps=5,
             energy_density_atol=0.01,
@@ -693,14 +744,14 @@ if __name__ == "__main__":
             max_bond_dim=64
         ) 
         plt.show()
-    
-    # Option 2: Parameter sweep for cluster execution (non-verbose, CSV output)
-    if True:  # Set to True to run parameter sweep
-        csv_file = "adaptive_precision_results.csv"
+        
+    else:
+        # Option 2: Parameter sweep for cluster execution (non-verbose, CSV output)
+        csv_file = os.path.join(args.output_dir, "adaptive_precision_results.csv")
         parameter_sets = create_example_parameter_sets()
         
         # Run parameter sweep
-        run_parameter_sweep(csv_file, parameter_sets, verbose=False)
+        run_parameter_sweep(csv_file, parameter_sets, verbose=args.verbose)
         
         print(f"\nResults saved to {csv_file}")
         print("CSV columns: system_qubits, bath_qubits, J, h, num_sweeps, p, training_method,")

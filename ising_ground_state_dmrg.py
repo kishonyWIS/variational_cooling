@@ -70,11 +70,12 @@ def main():
     try:
         # Calculate ground state energy
         energy = calculate_ising_ground_state(N=10, J=0.4, h=0.6, bond_dim=30, max_iter=200, cyclic=False)
-        
+        print(f"Ground state energy: {energy:.8f}")
+
     except Exception as e:
         print(f"Error during calculation: {e}")
         print("This might be due to insufficient bond dimension or convergence issues.")
         print("Try increasing the bond dimension or max iterations.")
 
 if __name__ == "__main__":
-    main() 
+    main()
