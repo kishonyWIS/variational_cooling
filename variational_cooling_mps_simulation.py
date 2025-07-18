@@ -146,16 +146,15 @@ def hva_multiple_sweeps(p, system_qubits, bath_qubits, parameters, num_sweeps=1,
     return qc
 
 
-def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qubits=5, half=True, open_boundary=1, 
-                           J=0.4, h=0.6, p=3, num_sweeps=1, 
-                           single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
-                           max_timeout_minutes=30, max_bond_dim=256, min_bond_dim=8,
-                           training_method="energy", initial_state="zeros", verbose=True, csv_file=None):
+def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_boundary=1, 
+                              J=0.4, h=0.6, p=3, num_sweeps=1, 
+                              single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
+                              training_method="energy", initial_state="zeros", verbose=True, csv_file=None,
+                              bond_dimensions=[32, 64], energy_density_atol=0.01):
     """
-    Adaptively adjust bond dimension to reach target precision for E-E0.
+    Run computations for fixed bond dimensions.
     
     Args:
-        energy_density_atol: absolute tolerance for energy density - std/system_qubits must be smaller than this
         system_qubits: number of system qubits
         bath_qubits: number of bath qubits
         half: if True, one bath site per two system qubits
@@ -166,31 +165,24 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
         num_sweeps: number of cooling sweeps
         single_qubit_gate_noise: single qubit gate noise parameter
         two_qubit_gate_noise: two qubit gate noise parameter
-        max_timeout_minutes: maximum runtime in minutes
-        max_bond_dim: maximum bond dimension to test
         training_method: training method ("energy" or "mpo_fidelity")
         initial_state: initial state description as string (e.g., "zeros", "random", etc.)
         verbose: if True, print progress and create plots
         csv_file: path to CSV file to save results (thread-safe)
-        system_qubits: number of system qubits
-        bath_qubits: number of bath qubits
-        half: if True, one bath site per two system qubits
-        open_boundary: boundary conditions (1=open, 0=periodic)
-        J: Ising coupling strength
-        h: transverse field strength
-        p: number of HVA layers per sweep
-        num_sweeps: number of cooling sweeps
-        single_qubit_gate_noise: single qubit gate noise parameter
-        two_qubit_gate_noise: two qubit gate noise parameter
-        max_timeout_minutes: maximum runtime in minutes
-        max_bond_dim: maximum bond dimension to test
-        max_shots: maximum number of shots to use
+        bond_dimensions: list of bond dimensions to test (default: [32, 64])
+        energy_density_atol: absolute tolerance for energy density - std/system_qubits must be smaller than this
     """
     
     num_qubits = system_qubits + bath_qubits
     
+    # Create system Hamiltonian
+    pauli_sys = pauli_sys_ZZ(system_qubits, 0, J, open_boundary) + pauli_sys_X(system_qubits, 0, h)
+    H_sys = SparsePauliOp.from_list(pauli_sys)
+    
     # Convert energy density tolerance to energy tolerance
     energy_atol = energy_density_atol * system_qubits
+    # Convert energy tolerance to precision for estimator
+    energy_precision = energy_atol / np.sqrt(len(pauli_sys))
     
     # Calculate ground state energy using DMRG
     if verbose:
@@ -203,9 +195,6 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
             print(f"Warning: Could not calculate ground state energy: {e}")
             print("Using E0 = 0 for relative error calculations")
         E0 = 0.0
-    
-    if verbose:
-        print(f"Tolerance criteria: energy_density_atol={energy_density_atol:.6f}, energy_atol={energy_atol:.6f} (std < energy_atol)")
 
     # Pre-optimized parameters for J=0.4, 3 layers
     best_para = np.array([
@@ -214,16 +203,10 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
         3.141592653589793, 1.9041272021498745, -0.7655691857212363, 
         1.463995846549075, 1.062269199105236, 0.450403882505529
     ])
-
-    # TODO: add best_para for different J, h
     
     # Split parameters
     lengths = [p, p, p, p]
     split_pts = np.cumsum(lengths)[:-1]
-    
-    # Create system Hamiltonian
-    pauli_sys = pauli_sys_ZZ(system_qubits, 0, J, open_boundary) + pauli_sys_X(system_qubits, 0, h)
-    H_sys = SparsePauliOp.from_list(pauli_sys)
     
     # Create observables for the enlarged circuit
     H_observables = []
@@ -251,35 +234,20 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
         indices.remove(bath_idx)
     layout = indices + bath_indices
     
-    # Adaptive precision study
-    bond_dimensions = []
-    energies = []
-    energy_diffs = []
-    energy_stds = []
-    truncation_errors = []
-    combined_stds = []
+    # Use provided bond dimensions
+    results = []
     
     start_time = time.time()
-    current_bond_dim = min_bond_dim # Start with minimum bond dimension
-    converged = False
-    dominant_variance = "truncation"
     
-    while not converged:
-        # Check timeout
-        elapsed_time = (time.time() - start_time) / 60  # in minutes
-        if elapsed_time > max_timeout_minutes:
-            if verbose:
-                print(f"Timeout reached ({max_timeout_minutes} minutes). Stopping.")
-            break
-            
+    for bond_dim in bond_dimensions:
         if verbose:
-            print(f"Testing bond_dim={current_bond_dim}")
+            print(f"Testing bond_dim={bond_dim}")
         
         # Setup backend with current bond dimension
         backend = get_noisy_simulator(
             single_qubit_gate_noise=single_qubit_gate_noise,
             two_qubit_gate_noise=two_qubit_gate_noise,
-            max_bond_dimension=current_bond_dim,
+            max_bond_dimension=bond_dim,
         )
         
         # Transpile circuit
@@ -287,11 +255,9 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
         transpiled_circuit = pm.run(total_circ)
         mapped_observables = [observable.apply_layout(transpiled_circuit.layout) for observable in observables]
         
-        # Setup estimator
-        # ignore this error, this line of code is correct
+        # Setup estimator with precision based on energy_atol
         options = EstimatorOptions(
-            # default_shots=current_shots,
-            default_precision=energy_atol/np.sqrt(len(mapped_observables))
+            default_precision=energy_precision
         )
         estimator = Estimator(mode=backend, options=options)
         
@@ -306,156 +272,117 @@ def adaptive_precision_study(energy_density_atol=0.01, system_qubits=10, bath_qu
         energy_diff = energy - E0  # E - E0
         energy_std = np.sqrt(np.sum(np.array(stds)**2))
         
-        bond_dimensions.append(current_bond_dim)
-        energies.append(energy)
-        energy_diffs.append(energy_diff)
-        energy_stds.append(energy_std)
-        
         # Calculate truncation error as difference from previous lower bond dimension
-        # Account for statistical noise in both measurements
         truncation_error = np.inf
-        if len(energy_diffs) >= 2:
+        if len(results) >= 1:
             # Find the most recent energy with a lower bond dimension
-            for i in range(len(energy_diffs) - 2, -1, -1):  # Go backwards from second-to-last
-                if bond_dimensions[i] < current_bond_dim:
-                    observed_diff = abs(energy_diffs[-1] - energy_diffs[i])
+            for i in range(len(results) - 1, -1, -1):  # Go backwards
+                if results[i]['bond_dim'] < bond_dim:
+                    observed_diff = abs(energy_diff - results[i]['energy_diff'])
                     # Isolate truncation error by subtracting statistical noise
                     # Var(difference) = Var(truncation_error) + Var(shot_noise_1) + Var(shot_noise_2)
-                    current_shot_variance = energy_stds[-1]**2
-                    previous_shot_variance = energy_stds[i]**2
+                    current_shot_variance = energy_std**2
+                    previous_shot_variance = results[i]['energy_std']**2
                     if observed_diff**2 - current_shot_variance - previous_shot_variance > max(previous_shot_variance, current_shot_variance):
                         truncation_variance = observed_diff**2 - current_shot_variance - previous_shot_variance
-                        dominant_variance = "truncation"
                     else:
                         truncation_variance = max(previous_shot_variance, current_shot_variance)
-                        dominant_variance = "shot"
                     truncation_error = np.sqrt(truncation_variance)
                     break
-            
-        truncation_errors.append(truncation_error)
         
         # Combined standard deviation (shot noise + truncation error)
         combined_std = np.sqrt(energy_std**2 + truncation_error**2)
-        combined_stds.append(combined_std)
+        
+        results.append({
+            'bond_dim': bond_dim,
+            'energy': energy,
+            'energy_diff': energy_diff,
+            'energy_std': energy_std,
+            'truncation_error': truncation_error,
+            'combined_std': combined_std
+        })
         
         if verbose:
             print(f"  Energy: {energy:.6f} (E-E0: {energy_diff:.6f}) ± {energy_std:.6f}")
             print(f"  Truncation error: {truncation_error:.6f}")
             print(f"  Combined std: {combined_std:.6f}")
-        
-        # Check if we've reached the target
-        # energy_atol: std must be smaller than energy_atol
-        if combined_std <= energy_atol:
-            converged = True
-            if verbose:
-                print(f"  ✓ Target reached! Combined std ({combined_std:.6f}) ≤ energy_atol ({energy_atol:.6f})")
-        else:
-            if verbose:
-                print(f"  ✗ Target not reached: Combined std ({combined_std:.6f}) > energy_atol ({energy_atol:.6f})")
-        if not converged:
-            # Check if shot noise is dominant (we can't reduce this further)
-            if dominant_variance == "shot":
-                if verbose:
-                    print(f"  → Shot noise is dominant. Cannot improve further. Stopping.")
-                break
-            else:  # Truncation error is dominant
-                # Increase bond dimension
-                new_bond_dim = current_bond_dim * 2
-                if new_bond_dim <= max_bond_dim:
-                    current_bond_dim = new_bond_dim
-                    if verbose:
-                        print(f"  → Increasing bond dimension to {current_bond_dim}")
-                else:
-                    if verbose:
-                        print(f"  → Bond dimension limit would be exceeded ({new_bond_dim} > {max_bond_dim}). Stopping.")
-                    break
     
     total_time = (time.time() - start_time) / 60  # in minutes
     
     if verbose:
         print("=" * 70)
-        print(f"Adaptive precision study completed in {total_time:.2f} minutes!")
-        print(f"Final bond dimension: {bond_dimensions[-1]}")
-        print(f"Final energy: {energies[-1]:.6f} (E-E0: {energy_diffs[-1]:.6f}) ± {combined_stds[-1]:.6f}")
-        print(f"Final tolerance: energy_density_atol={energy_density_atol:.6f}, energy_atol={energy_atol:.6f}")
-        print(f"Achieved: std={combined_stds[-1]:.6f}")
+        print(f"Fixed bond dimension study completed in {total_time:.2f} minutes!")
+        for result in results:
+            print(f"Bond dim {result['bond_dim']}: E-E0 = {result['energy_diff']:.6f} ± {result['combined_std']:.6f} (shot: {result['energy_std']:.6f}, trunc: {result['truncation_error']:.6f})")
     
     # Save results to CSV if specified
     if csv_file is not None:
-        result_dict = {
-            'system_qubits': system_qubits,
-            'bath_qubits': bath_qubits,
-            'J': J,
-            'h': h,
-            'num_sweeps': num_sweeps,
-            'p': p,
-            'training_method': training_method,
-            'single_qubit_gate_noise': single_qubit_gate_noise,
-            'two_qubit_gate_noise': two_qubit_gate_noise,
-            'initial_state': initial_state,
-                    'energy_density_atol': energy_density_atol,
-        'max_bond_dim': max_bond_dim,
-        'min_bond_dim': min_bond_dim,
-        'ground_state_energy': E0,
-            'final_energy': energies[-1],
-            'final_bond_dim': bond_dimensions[-1],
-            'final_combined_std': combined_stds[-1],
-            'converged': converged,
-            'total_time_minutes': total_time,
-            'num_iterations': len(bond_dimensions)
-        }
-        save_result_to_csv(csv_file, result_dict)
+        for result in results:
+            result_dict = {
+                'system_qubits': system_qubits,
+                'bath_qubits': bath_qubits,
+                'J': J,
+                'h': h,
+                'num_sweeps': num_sweeps,
+                'p': p,
+                'training_method': training_method,
+                'single_qubit_gate_noise': single_qubit_gate_noise,
+                'two_qubit_gate_noise': two_qubit_gate_noise,
+                'initial_state': initial_state,
+                'ground_state_energy': E0,
+                'bond_dim': result['bond_dim'],
+                'energy': result['energy'],
+                'energy_diff': result['energy_diff'],
+                'energy_std': result['energy_std'],
+                'truncation_error': result['truncation_error'],
+                'combined_std': result['combined_std'],
+                'energy_density_atol': energy_density_atol,
+                'energy_atol': energy_atol,
+                'total_time_minutes': total_time
+            }
+            save_result_to_csv(csv_file, result_dict)
     
-    # Create convergence plot only if verbose
+    # Create comparison plot only if verbose
     if verbose:
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(10, 6))
         
-        # Create subplot for energy convergence
-        plt.subplot(2, 1, 1)
-        plt.errorbar(range(len(energy_diffs)), energy_diffs, yerr=combined_stds, 
+        bond_dims = [r['bond_dim'] for r in results]
+        energy_diffs = [r['energy_diff'] for r in results]
+        energy_stds = [r['energy_std'] for r in results]
+        
+        plt.errorbar(bond_dims, energy_diffs, yerr=energy_stds, 
                     marker='o', capsize=5, capthick=2, linewidth=2, markersize=8, 
-                    label='E-E0 ± Combined Error')
-        plt.errorbar(range(len(energy_diffs)), energy_diffs, yerr=energy_stds, 
+                    label='E-E0 ± Shot Noise Only')
+        
+        # Also plot combined error
+        combined_stds = [r['combined_std'] for r in results]
+        plt.errorbar(bond_dims, energy_diffs, yerr=combined_stds, 
                     marker='s', capsize=3, capthick=1, linewidth=1, markersize=6, 
-                    alpha=0.7, label='E-E0 ± Shot Noise Only')
+                    alpha=0.7, label='E-E0 ± Combined Error')
         plt.axhline(y=0, color='black', linestyle=':', alpha=0.5, label='Ground state (E-E0=0)')
-        plt.xlabel('Iteration', fontsize=12)
+        plt.xlabel('Bond Dimension', fontsize=12)
         plt.ylabel('E - E0', fontsize=12)
-        plt.title(f'Adaptive Precision Study\n({system_qubits} system + {bath_qubits} bath qubits, {num_sweeps} sweep)', fontsize=14)
+        plt.title(f'Fixed Bond Dimension Study\n({system_qubits} system + {bath_qubits} bath qubits, {num_sweeps} sweep)', fontsize=14)
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        # Create subplot for bond dimension evolution
-        plt.subplot(2, 1, 2)
-        plt.plot(range(len(bond_dimensions)), bond_dimensions, 'o-', label='Bond Dimension', linewidth=2)
-        plt.xlabel('Iteration', fontsize=12)
-        plt.ylabel('Bond Dimension', fontsize=12)
-        plt.title('Bond Dimension Evolution', fontsize=14)
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.yscale('log')
-        
-        # Set y-axis ticks to match the actual bond dimension values and format them as integers
-        ax = plt.gca()
-        ax.yaxis.set_major_locator(mticker.FixedLocator(bond_dimensions))
-        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, p: str(int(x))))
-        ax.yaxis.set_minor_locator(mticker.NullLocator())  # Remove minor ticks
+        # Set x-axis ticks to match the actual bond dimension values
+        plt.xticks(bond_dims)
         
         plt.tight_layout()
     
-    return bond_dimensions, energies, energy_diffs, energy_stds, truncation_errors, combined_stds, converged
+    return results
 
 
-def sweep_convergence_study(max_sweeps=10, energy_density_atol=0.01, system_qubits=10, bath_qubits=5, 
+def sweep_convergence_study(max_sweeps=10, system_qubits=10, bath_qubits=5, 
                           half=True, open_boundary=1, J=0.4, h=0.6, p=3,
                           single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
-                          max_timeout_minutes=30, max_bond_dim=256):
+                          bond_dimensions=[32, 64], energy_density_atol=0.01):
     """
-    Study energy convergence as a function of number of sweeps using adaptive precision.
+    Study energy convergence as a function of number of sweeps using fixed bond dimensions.
     
     Args:
         max_sweeps: maximum number of sweeps to test
-        atol: absolute tolerance - std must be smaller than atol
         system_qubits: number of system qubits
         bath_qubits: number of bath qubits
         half: if True, one bath site per two system qubits
@@ -465,9 +392,8 @@ def sweep_convergence_study(max_sweeps=10, energy_density_atol=0.01, system_qubi
         p: number of HVA layers per sweep
         single_qubit_gate_noise: single qubit gate noise parameter
         two_qubit_gate_noise: two qubit gate noise parameter
-        max_timeout_minutes: maximum runtime in minutes per sweep
-        max_bond_dim: maximum bond dimension to test
-        max_shots: maximum number of shots to use
+        bond_dimensions: list of bond dimensions to test (default: [32, 64])
+        energy_density_atol: absolute tolerance for energy density - std/system_qubits must be smaller than this
     """
     
     print(f"Sweep convergence study (max_sweeps: {max_sweeps})...")
@@ -485,23 +411,26 @@ def sweep_convergence_study(max_sweeps=10, energy_density_atol=0.01, system_qubi
         print(f"\n--- Testing {num_sweeps} sweep(s) ---")
         
         try:
-            # Run adaptive precision study for this number of sweeps
-            bond_dimensions, energies, energy_diffs, energy_stds, truncation_errors, combined_stds, converged = adaptive_precision_study(
-                energy_density_atol=energy_density_atol, system_qubits=system_qubits, bath_qubits=bath_qubits,
+            # Run fixed bond dimension study for this number of sweeps
+            results = fixed_bond_dimension_study(
+                system_qubits=system_qubits, bath_qubits=bath_qubits,
                 half=half, open_boundary=open_boundary, J=J, h=h, p=p, num_sweeps=num_sweeps,
                 single_qubit_gate_noise=single_qubit_gate_noise, two_qubit_gate_noise=two_qubit_gate_noise,
-                max_timeout_minutes=max_timeout_minutes, max_bond_dim=max_bond_dim
+                bond_dimensions=bond_dimensions, energy_density_atol=energy_density_atol
             )
             
-            # Store final results
-            sweep_counts.append(num_sweeps)
-            final_energies.append(energies[-1])
-            final_energy_diffs.append(energy_diffs[-1])
-            final_combined_stds.append(combined_stds[-1])
-            final_bond_dims.append(bond_dimensions[-1])
-            converged_status.append(converged)
+            # Store results for both bond dimensions
+            for result in results:
+                sweep_counts.append(num_sweeps)
+                final_energies.append(result['energy'])
+                final_energy_diffs.append(result['energy_diff'])
+                final_combined_stds.append(result['combined_std'])
+                final_bond_dims.append(result['bond_dim'])
+                converged_status.append(True)  # Always True for fixed bond dimensions
             
-            print(f"  Final result: E-E0 = {energy_diffs[-1]:.6f} ± {combined_stds[-1]:.6f}")
+            print(f"  Results:")
+            for result in results:
+                print(f"           bond_dim={result['bond_dim']}: E-E0 = {result['energy_diff']:.6f} ± {result['combined_std']:.6f} (shot: {result['energy_std']:.6f}, trunc: {result['truncation_error']:.6f})")
             
         except Exception as e:
             print(f"  Error for {num_sweeps} sweeps: {e}")
@@ -510,13 +439,14 @@ def sweep_convergence_study(max_sweeps=10, energy_density_atol=0.01, system_qubi
     print("\n" + "=" * 70)
     print("Sweep convergence study completed!")
     
-    # Print convergence summary
-    converged_count = sum(converged_status)
+    # Print summary
     total_count = len(converged_status)
-    print(f"Convergence summary: {converged_count}/{total_count} sweeps converged to energy density tolerance (energy_density_atol={energy_density_atol:.6f})")
-    for i, (sweeps, conv) in enumerate(zip(sweep_counts, converged_status)):
-        status = "✓" if conv else "✗"
-        print(f"  {sweeps} sweep(s): {status}")
+    print(f"Study completed: {total_count} data points collected")
+    print("Results for each sweep count:")
+    for i, sweeps in enumerate(set(sweep_counts)):
+        sweep_indices = [j for j, s in enumerate(sweep_counts) if s == sweeps]
+        unique_bond_dims = sorted(set([final_bond_dims[j] for j in sweep_indices]))
+        print(f"  {sweeps} sweep(s): {len(sweep_indices)} data points (bond_dim={','.join(map(str, unique_bond_dims))})")
     
     # Create convergence plot
     plt.figure(figsize=(12, 8))
@@ -524,27 +454,20 @@ def sweep_convergence_study(max_sweeps=10, energy_density_atol=0.01, system_qubi
     # Energy difference vs number of sweeps
     plt.subplot(2, 1, 1)
     
-    # Separate converged and non-converged points
-    converged_indices = [i for i, conv in enumerate(converged_status) if conv]
-    non_converged_indices = [i for i, conv in enumerate(converged_status) if not conv]
+    # Group by bond dimension
+    unique_bond_dims = sorted(set(final_bond_dims))
+    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+    markers = ['o', 's', '^', 'v', '<', '>', 'p', '*', 'h', 'H']
     
-    # Plot converged points in blue
-    if converged_indices:
-        converged_sweeps = [sweep_counts[i] for i in converged_indices]
-        converged_diffs = [final_energy_diffs[i] for i in converged_indices]
-        converged_stds = [final_combined_stds[i] for i in converged_indices]
-        plt.errorbar(converged_sweeps, converged_diffs, yerr=converged_stds, 
-                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=8, 
-                    color='blue', label='Converged')
-    
-    # Plot non-converged points in red
-    if non_converged_indices:
-        non_converged_sweeps = [sweep_counts[i] for i in non_converged_indices]
-        non_converged_diffs = [final_energy_diffs[i] for i in non_converged_indices]
-        non_converged_stds = [final_combined_stds[i] for i in non_converged_indices]
-        plt.errorbar(non_converged_sweeps, non_converged_diffs, yerr=non_converged_stds, 
-                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=8, 
-                    color='red', label='Not Converged')
+    for i, bond_dim in enumerate(unique_bond_dims):
+        bond_dim_indices = [j for j, bd in enumerate(final_bond_dims) if bd == bond_dim]
+        if bond_dim_indices:
+            bd_sweeps = [sweep_counts[j] for j in bond_dim_indices]
+            bd_diffs = [final_energy_diffs[j] for j in bond_dim_indices]
+            bd_stds = [final_combined_stds[j] for j in bond_dim_indices]
+            plt.errorbar(bd_sweeps, bd_diffs, yerr=bd_stds, 
+                        marker=markers[i % len(markers)], capsize=5, capthick=2, linewidth=2, markersize=8, 
+                        color=colors[i % len(colors)], label=f'Bond dim={bond_dim}')
     
     plt.axhline(y=0, color='black', linestyle=':', alpha=0.5, label='Ground state (E-E0=0)')
     plt.xlabel('Number of Sweeps', fontsize=12)
@@ -554,26 +477,22 @@ def sweep_convergence_study(max_sweeps=10, energy_density_atol=0.01, system_qubi
     plt.legend()
     
     # Set x-axis ticks to match the actual sweep count values
-    plt.xticks(sweep_counts)
+    plt.xticks(sorted(set(sweep_counts)))
     
     # Bond dimension vs number of sweeps
     plt.subplot(2, 1, 2)
-    plt.plot(sweep_counts, final_bond_dims, 'o-', label='Final Bond Dimension', linewidth=2)
+    plt.plot(sweep_counts, final_bond_dims, 'o-', label='Bond Dimension', linewidth=2)
     plt.xlabel('Number of Sweeps', fontsize=12)
     plt.ylabel('Bond Dimension', fontsize=12)
     plt.title('Bond Dimension vs Number of Sweeps', fontsize=14)
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.yscale('log')
     
-    # Set y-axis ticks to match the actual bond dimension values and format them as integers
-    ax = plt.gca()
-    ax.yaxis.set_major_locator(mticker.FixedLocator(final_bond_dims))
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, p: str(int(x))))
-    ax.yaxis.set_minor_locator(mticker.NullLocator())  # Remove minor ticks
+    # Set y-axis ticks to match the actual bond dimension values
+    plt.yticks(unique_bond_dims)
     
     # Set x-axis ticks to match the actual sweep count values
-    plt.xticks(sweep_counts)
+    plt.xticks(sorted(set(sweep_counts)))
     
     plt.tight_layout()
     
@@ -597,8 +516,8 @@ def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
         print(f"Parameters: {params}")
         
         try:
-            # Run adaptive precision study with current parameters
-            adaptive_precision_study(
+            # Run fixed bond dimension study with current parameters
+            fixed_bond_dimension_study(
                 csv_file=csv_file,
                 verbose=verbose,
                 **params
@@ -618,16 +537,15 @@ def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
                 'single_qubit_gate_noise': params.get('single_qubit_gate_noise', 'N/A'),
                 'two_qubit_gate_noise': params.get('two_qubit_gate_noise', 'N/A'),
                 'initial_state': params.get('initial_state', 'N/A'),
-                'energy_density_atol': params.get('energy_density_atol', 'N/A'),
-                'max_bond_dim': params.get('max_bond_dim', 'N/A'),
-                'min_bond_dim': params.get('min_bond_dim', 'N/A'),
                 'ground_state_energy': 'ERROR',
-                'final_energy': 'ERROR',
-                'final_bond_dim': 'ERROR',
-                'final_combined_std': 'ERROR',
-                'converged': 'ERROR',
+                'bond_dim': 'ERROR',
+                'energy': 'ERROR',
+                'energy_diff': 'ERROR',
+                'energy_std': 'ERROR',
+                'truncation_error': 'ERROR',
+                'combined_std': 'ERROR',
+                'energy_atol': 'ERROR',
                 'total_time_minutes': 'ERROR',
-                'num_iterations': 'ERROR',
                 'error_message': str(e)
             }
             save_result_to_csv(csv_file, error_dict)
@@ -664,7 +582,6 @@ def create_example_parameter_sets():
         for system_qubits, bath_qubits in system_sizes:
             for num_sweeps in num_sweeps_list:
                 parameter_sets.append({
-                    'energy_density_atol': 0.01,
                     'system_qubits': system_qubits,
                     'bath_qubits': bath_qubits,
                     'J': J,
@@ -673,11 +590,10 @@ def create_example_parameter_sets():
                     'num_sweeps': num_sweeps,
                     'single_qubit_gate_noise': base_single_qubit_noise * noise_factor,
                     'two_qubit_gate_noise': base_two_qubit_noise * noise_factor,
-                    'max_timeout_minutes': 30,
-                    'max_bond_dim': 64,
-                    'min_bond_dim': 8,
                     'training_method': 'energy',
-                    'initial_state': 'zeros'
+                    'initial_state': 'zeros',
+                    'bond_dimensions': [32, 64],  # Default bond dimensions for parameter sets
+                    'energy_density_atol': 0.01  # Energy density tolerance for estimator precision
                 })
     
     return parameter_sets
@@ -687,8 +603,7 @@ if __name__ == "__main__":
     import argparse
     import json
     
-    # Set matplotlib to use LaTeX for better formatting
-    plt.rcParams['text.usetex'] = True
+    # Set matplotlib formatting (without LaTeX to avoid LaTeX dependency issues)
     plt.rcParams['font.size'] = 12
     plt.rcParams['figure.dpi'] = 150
     
@@ -700,8 +615,14 @@ if __name__ == "__main__":
     parser.add_argument('--shared-csv', type=str, help='Shared CSV file for all jobs (thread-safe)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output and plots')
     parser.add_argument('--sweep-study', action='store_true', help='Run sweep convergence study instead of parameter sweep')
+    parser.add_argument('--bond-dims', type=str, default='32,64', help='Comma-separated list of bond dimensions to test (default: 32,64)')
+    parser.add_argument('--energy-density-atol', type=float, default=0.01, help='Energy density tolerance for estimator precision (default: 0.01)')
     
     args = parser.parse_args()
+    
+    # Parse bond dimensions and energy density tolerance
+    bond_dimensions = [int(x.strip()) for x in args.bond_dims.split(',')]
+    energy_density_atol = args.energy_density_atol
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -730,7 +651,6 @@ if __name__ == "__main__":
         print("Running sweep convergence study...")
         sweep_counts, final_energies, final_energy_diffs, final_combined_stds, final_bond_dims, converged_status = sweep_convergence_study(
             max_sweeps=5,
-            energy_density_atol=0.01,
             system_qubits=20,
             bath_qubits=10,
             half=True,
@@ -740,8 +660,8 @@ if __name__ == "__main__":
             p=3,
             single_qubit_gate_noise=0.0003,
             two_qubit_gate_noise=0.003,
-            max_timeout_minutes=30,
-            max_bond_dim=64
+            bond_dimensions=bond_dimensions,
+            energy_density_atol=energy_density_atol
         ) 
         plt.show()
         
@@ -756,5 +676,4 @@ if __name__ == "__main__":
         print(f"\nResults saved to {csv_file}")
         print("CSV columns: system_qubits, bath_qubits, J, h, num_sweeps, p, training_method,")
         print("             single_qubit_gate_noise, two_qubit_gate_noise, initial_state,")
-        print("             energy_density_atol, max_bond_dim, ground_state_energy, final_energy,")
-        print("             final_bond_dim, final_combined_std, converged, total_time_minutes, num_iterations")
+        print("             ground_state_energy, bond_dim, energy, energy_diff, energy_std, truncation_error, combined_std, energy_atol, total_time_minutes")

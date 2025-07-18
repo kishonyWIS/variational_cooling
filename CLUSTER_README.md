@@ -63,6 +63,8 @@ python3 combine_results.py --analyze
 
 Edit the `create_example_parameter_sets()` function in `variational_cooling_mps_simulation.py` to define your parameter combinations:
 
+**Note**: The bond dimensions are now configurable via command line arguments. You can specify them in the job configuration or override them when running the simulation.
+
 ```python
 def create_example_parameter_sets():
     parameter_sets = []
@@ -72,7 +74,6 @@ def create_example_parameter_sets():
         for num_sweeps in [1, 2, 3, 5]:
             for noise_factor in [1.0, 2.0, 5.0]:
                 parameter_sets.append({
-                    'energy_density_atol': 0.01,
                     'system_qubits': system_qubits,
                     'bath_qubits': bath_qubits,
                     'J': 0.4,
@@ -81,10 +82,10 @@ def create_example_parameter_sets():
                     'num_sweeps': num_sweeps,
                     'single_qubit_gate_noise': 0.0003 * noise_factor,
                     'two_qubit_gate_noise': 0.003 * noise_factor,
-                    'max_timeout_minutes': 30,
-                    'max_bond_dim': 64,
                     'training_method': 'energy',
-                    'initial_state': 'zeros'
+                    'initial_state': 'zeros',
+                    'bond_dimensions': [32, 64],  # Bond dimensions to test
+                    'energy_density_atol': 0.01  # Energy density tolerance for estimator precision
                 })
     
     return parameter_sets
@@ -103,7 +104,64 @@ WALL_TIME = "24:00"        # Wall clock time limit
 MEMORY = "8GB"            # Memory requirement
 CORES = 1                 # Number of cores
 QUEUE = "normal"          # Queue name
+BOND_DIMS = "32,64"       # Bond dimensions to test (comma-separated)
+ENERGY_DENSITY_ATOL = "0.01"      # Energy density tolerance for estimator precision
 ```
+
+### Bond Dimensions Configuration
+
+The bond dimensions can be configured in several ways:
+
+1. **In job configuration** (recommended for cluster jobs):
+   ```python
+   BOND_DIMS = "32,64"  # Default for all jobs
+   ```
+
+2. **Via command line** (for testing or overriding):
+   ```bash
+   # Test different bond dimensions
+   python3 variational_cooling_mps_simulation.py --bond-dims 16,32,64,128
+   
+   # Test single bond dimension
+   python3 variational_cooling_mps_simulation.py --bond-dims 64
+   ```
+
+3. **In parameter sets** (for per-parameter-set configuration):
+   ```python
+   parameter_sets.append({
+       # ... other parameters ...
+       'bond_dimensions': [16, 32, 64],  # Override default for this set
+       'energy_density_atol': 0.005  # Override default energy density tolerance
+   })
+   ```
+
+### Energy Tolerance Configuration
+
+The energy tolerance (`energy_density_atol`) controls the precision of the estimator:
+
+1. **In job configuration** (recommended for cluster jobs):
+   ```python
+   ENERGY_DENSITY_ATOL = "0.01"  # Default for all jobs
+   ```
+
+2. **Via command line** (for testing or overriding):
+   ```bash
+   # Test with different energy density tolerance
+   python3 variational_cooling_mps_simulation.py --energy-density-atol 0.005
+   
+   # Test with higher tolerance (faster, less precise)
+   python3 variational_cooling_mps_simulation.py --energy-density-atol 0.05
+   ```
+
+3. **In parameter sets** (for per-parameter-set configuration):
+   ```python
+   parameter_sets.append({
+       # ... other parameters ...
+       'energy_density_atol': 0.005  # Override default for this set
+   })
+   ```
+
+**Note**: Lower `energy_density_atol` values result in higher precision but longer computation times.
 
 ### Cluster-Specific Modifications
 
@@ -133,7 +191,7 @@ Each job script (`job_XXX.lsf`) contains:
 # module load qiskit
 
 # Run simulation
-python3 variational_cooling_mps_simulation.py --job-id 1 --param-file jobs/params_001.json --output-dir results
+python3 variational_cooling_mps_simulation.py --job-id 1 --param-file jobs/params_001.json --output-dir results --bond-dims 32,64 --energy-density-atol 0.01
 ```
 
 ## Output Structure
@@ -197,7 +255,7 @@ bsub -I -q normal -W 1:00 -M 4GB -n 1 bash jobs/job_001.lsf
 
 Test parameter sets locally before submitting to cluster:
 ```bash
-python3 variational_cooling_mps_simulation.py --param-file jobs/params_001.json --verbose
+python3 variational_cooling_mps_simulation.py --param-file jobs/params_001.json --verbose --bond-dims 32,64 --energy-density-atol 0.01
 ```
 
 ## Results Analysis

@@ -12,7 +12,7 @@ from variational_cooling_mps_simulation import create_example_parameter_sets
 
 def create_job_script(job_id, parameter_sets, output_dir="jobs", 
                      job_name="variational_cooling", wall_time="24:00", 
-                     memory="8GB", cores=1, queue="normal"):
+                     memory="8GB", cores=1, queue="normal", bond_dims="32,64", energy_density_atol="0.01"):
     """
     Create a job script for a subset of parameter sets.
     
@@ -61,7 +61,7 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 mkdir -p results
 
 # Run the parameter sweep for this job
-python3 variational_cooling_mps_simulation.py --job-id {job_id} --param-file {param_file} --output-dir results --shared-csv results/variational_cooling_results.csv
+python3 variational_cooling_mps_simulation.py --job-id {job_id} --param-file {param_file} --output-dir results --shared-csv results/variational_cooling_results.csv --bond-dims {bond_dims} --energy-density-atol {energy_density_atol}
 
 echo "Job {job_id} completed at $(date)"
 """)
@@ -71,7 +71,7 @@ echo "Job {job_id} completed at $(date)"
 
 def generate_jobs(parameter_sets, jobs_per_file=1, output_dir="jobs", 
                  job_name="variational_cooling", wall_time="24:00", 
-                 memory="8GB", cores=1, queue="normal"):
+                 memory="8GB", cores=1, queue="normal", bond_dims="32,64", energy_density_atol="0.01"):
     """
     Generate multiple job files, each containing a subset of parameter sets.
     
@@ -97,7 +97,7 @@ def generate_jobs(parameter_sets, jobs_per_file=1, output_dir="jobs",
         chunk = parameter_sets[i:i + jobs_per_file]
         
         job_script, param_file = create_job_script(
-            job_id, chunk, output_dir, job_name, wall_time, memory, cores, queue
+            job_id, chunk, output_dir, job_name, wall_time, memory, cores, queue, bond_dims, energy_density_atol
         )
         job_scripts.append(job_script)
         
@@ -182,10 +182,19 @@ if __name__ == "__main__":
     MEMORY = "1GB"
     CORES = 1
     QUEUE = "berg"
+    BOND_DIMS = "32,64"
+    ENERGY_DENSITY_ATOL = "0.01"  # Energy density tolerance for estimator precision
     
     print("Generating cluster jobs for variational cooling parameter sweep...")
     print(f"Jobs per file: {JOBS_PER_FILE}")
     print(f"Output directory: {OUTPUT_DIR}")
+    
+    # Clean up existing job files
+    if os.path.exists(OUTPUT_DIR):
+        import shutil
+        shutil.rmtree(OUTPUT_DIR)
+        print(f"Cleaned up existing directory: {OUTPUT_DIR}")
+    
     print()
     
     # Get parameter sets
@@ -201,7 +210,9 @@ if __name__ == "__main__":
         wall_time=WALL_TIME,
         memory=MEMORY,
         cores=CORES,
-        queue=QUEUE
+        queue=QUEUE,
+        bond_dims=BOND_DIMS,
+        energy_density_atol=ENERGY_DENSITY_ATOL
     )
     
     # Create submit all script

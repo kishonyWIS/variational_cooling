@@ -51,10 +51,21 @@ else
 fi
 echo
 
+# Step 8: Show bond dimensions and energy density tolerance configuration
+echo "Step 8: Bond dimensions and energy density tolerance configuration:"
+echo "  Default bond dimensions: 32,64 (configured in cluster_job_generator.py)"
+echo "  Default energy density tolerance: 0.01 (configured in cluster_job_generator.py)"
+echo "  To test with different bond dimensions:"
+echo "    python3 variational_cooling_mps_simulation.py --param-file jobs/params_001.json --bond-dims 16,32,64,128 --verbose"
+echo "  To test with different energy density tolerance:"
+echo "    python3 variational_cooling_mps_simulation.py --param-file jobs/params_001.json --energy-density-atol 0.005 --verbose"
+echo
+
 echo "=== Workflow Complete ==="
 echo "Next steps:"
 echo "1. Review generated files"
 echo "2. Modify parameters in variational_cooling_mps_simulation.py if needed"
-echo "3. Submit jobs using the commands above"
-echo "4. Monitor progress"
-echo "5. Combine results when complete" 
+echo "3. Configure bond dimensions and energy density tolerance in cluster_job_generator.py if needed (default: 32,64, energy_density_atol=0.01)"
+echo "4. Submit jobs using the commands above"
+echo "5. Monitor progress"
+echo "6. Combine results when complete" 

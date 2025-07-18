@@ -22,22 +22,18 @@ def load_and_clean_data(csv_file):
     df = pd.read_csv(csv_file)
     print(f"Loaded {len(df)} results from {csv_file}")
     
-    # Clean data
-    df = df[df['converged'] != 'ERROR']  # Remove error rows
-    df['converged'] = df['converged'].astype(bool)
-    
-    # Filter to only include converged results
-    df = df[df['converged'] == True]
-    print(f"After filtering converged results: {len(df)} results")
-    
     # Convert numeric columns that might be strings
-    df['final_combined_std'] = pd.to_numeric(df['final_combined_std'], errors='coerce')
-    df['final_energy'] = pd.to_numeric(df['final_energy'], errors='coerce')
+    df['combined_std'] = pd.to_numeric(df['combined_std'], errors='coerce')
+    df['energy'] = pd.to_numeric(df['energy'], errors='coerce')
     df['ground_state_energy'] = pd.to_numeric(df['ground_state_energy'], errors='coerce')
-    df['final_bond_dim'] = pd.to_numeric(df['final_bond_dim'], errors='coerce')
+    df['bond_dim'] = pd.to_numeric(df['bond_dim'], errors='coerce')
+    
+    # Filter to only include bond dimension 64
+    df = df[df['bond_dim'] == 64]
+    print(f"After filtering to bond dimension 64: {len(df)} results")
     
     # Remove rows with NaN values in critical columns
-    df = df.dropna(subset=['final_combined_std', 'final_energy', 'ground_state_energy', 'final_bond_dim'])
+    df = df.dropna(subset=['combined_std', 'energy', 'ground_state_energy', 'bond_dim'])
     
     # Calculate derived quantities
     df['total_qubits'] = df['system_qubits'] + df['bath_qubits']
@@ -52,8 +48,8 @@ def plot_energy_density_vs_sweeps(df, output_dir="plots"):
     
     # Calculate energy density above ground state (energy per system qubit)
     df['ground_state_energy_density'] = df['ground_state_energy'] / df['system_qubits']
-    df['energy_density_above_ground'] = (df['final_energy'] - df['ground_state_energy']) / df['system_qubits']
-    df['energy_density_error'] = df['final_combined_std'] / df['system_qubits']
+    df['energy_density_above_ground'] = (df['energy'] - df['ground_state_energy']) / df['system_qubits']
+    df['energy_density_error'] = df['combined_std'] / df['system_qubits']
     
     # Get unique system sizes and noise factors
     system_sizes = sorted(df['system_qubits'].unique())
@@ -64,7 +60,21 @@ def plot_energy_density_vs_sweeps(df, output_dir="plots"):
     axes = axes.flatten()
     
     # Color map for noise levels
-    color_array = cm.viridis(np.linspace(0, 1, len(noise_factors)))
+    color_array = plt.cm.get_cmap('viridis')(np.linspace(0, 1, len(noise_factors)))
+    
+    # Calculate global axis limits for consistency across all panels
+    all_energy_densities = df['energy_density_above_ground']
+    all_sweeps = df['num_sweeps']
+    
+    y_min, y_max = all_energy_densities.min(), all_energy_densities.max()
+    y_range = y_max - y_min
+    y_min_global = y_min - 0.1*y_range
+    y_max_global = y_max + 0.1*y_range
+    
+    x_min, x_max = all_sweeps.min(), all_sweeps.max()
+    x_range = x_max - x_min
+    x_min_global = x_min - 0.05*x_range
+    x_max_global = x_max + 0.05*x_range
     
     for i, system_size in enumerate(system_sizes):
         if i < len(axes):
@@ -97,11 +107,9 @@ def plot_energy_density_vs_sweeps(df, output_dir="plots"):
                 ax.grid(True, alpha=0.3)
                 ax.legend()
                 
-                # Set consistent y-axis limits for comparison
-                all_energy_densities = df['energy_density_above_ground']
-                y_min, y_max = all_energy_densities.min(), all_energy_densities.max()
-                y_range = y_max - y_min
-                ax.set_ylim(y_min - 0.1*y_range, y_max + 0.1*y_range)
+                # Set consistent axis limits across all panels
+                ax.set_xlim(x_min_global, x_max_global)
+                ax.set_ylim(y_min_global, y_max_global)
     
     # Hide unused subplots
     for i in range(len(system_sizes), len(axes)):
@@ -123,71 +131,69 @@ def plot_energy_density_vs_sweeps(df, output_dir="plots"):
     plt.show()
 
 
-def plot_bond_dimension_vs_sweeps(df, output_dir="plots"):
-    """Plot final bond dimension vs number of sweeps for each system size, with noise levels as different colored lines."""
+def plot_steady_state_vs_noise(df, output_dir="plots"):
+    """Plot steady state (asymptotic) energy density as a function of noise factor for different system sizes."""
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Calculate energy density above ground state (energy per system qubit)
+    df['ground_state_energy_density'] = df['ground_state_energy'] / df['system_qubits']
+    df['energy_density_above_ground'] = (df['energy'] - df['ground_state_energy']) / df['system_qubits']
+    df['energy_density_error'] = df['combined_std'] / df['system_qubits']
     
     # Get unique system sizes and noise factors
     system_sizes = sorted(df['system_qubits'].unique())
     noise_factors = sorted(df['noise_factor'].unique())
     
-    # Create subplots: one for each system size
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    axes = axes.flatten()
+    # Create figure
+    plt.figure(figsize=(10, 8))
     
-    # Color map for noise levels
-    color_array = cm.viridis(np.linspace(0, 1, len(noise_factors)))
+    # Color map for system sizes
+    color_array = plt.cm.get_cmap('tab10')(np.linspace(0, 1, len(system_sizes)))
     
+    # For each system size, find the steady state energy density at each noise level
     for i, system_size in enumerate(system_sizes):
-        if i < len(axes):
-            ax = axes[i]
+        # Filter data for this system size
+        subset = df[df['system_qubits'] == system_size]
+        
+        if len(subset) > 0:
+            steady_state_energies = []
+            steady_state_errors = []
+            noise_levels = []
             
-            # Filter data for this system size
-            subset = df[df['system_qubits'] == system_size]
-            
-            if len(subset) > 0:
-                # Plot each noise level with a different color
-                for j, noise_factor in enumerate(noise_factors):
-                    noise_subset = subset[subset['noise_factor'] == noise_factor]
+            # For each noise factor, find the energy density at the maximum number of sweeps (steady state)
+            for noise_factor in noise_factors:
+                noise_subset = subset[subset['noise_factor'] == noise_factor]
+                
+                if len(noise_subset) > 0:
+                    # Find the maximum number of sweeps for this noise level
+                    max_sweeps = noise_subset['num_sweeps'].max()
                     
-                    if len(noise_subset) > 0:
-                        # Sort by number of sweeps
-                        sweep_data = noise_subset[['num_sweeps', 'final_bond_dim']].copy()
-                        sweep_data = sweep_data.sort_values('num_sweeps')
-                        
-                        # Plot bond dimension
-                        ax.plot(sweep_data['num_sweeps'], sweep_data['final_bond_dim'], 
-                               marker='o', linewidth=2, markersize=6, color=color_array[j], alpha=0.8)
-                
-                ax.set_xlabel('Number of Sweeps')
-                ax.set_ylabel('Final Bond Dimension')
-                ax.set_title(f'Bond Dimension vs Sweeps: {system_size} System Qubits')
-                ax.grid(True, alpha=0.3)
-                ax.legend()
-                
-                # Set consistent y-axis limits for comparison
-                all_bond_dims = df['final_bond_dim']
-                y_min, y_max = all_bond_dims.min(), all_bond_dims.max()
-                y_range = y_max - y_min
-                ax.set_ylim(y_min - 0.1*y_range, y_max + 0.1*y_range)
+                    # Get the data point with maximum sweeps (steady state)
+                    steady_state_data = noise_subset[noise_subset['num_sweeps'] == max_sweeps]
+                    
+                    if len(steady_state_data) > 0:
+                        # Take the mean if there are multiple points with same max sweeps
+                        steady_state_energies.append(steady_state_data['energy_density_above_ground'].mean())
+                        steady_state_errors.append(steady_state_data['energy_density_error'].mean())
+                        noise_levels.append(noise_factor)
+            
+            if len(steady_state_energies) > 0:
+                # Plot with error bars
+                plt.errorbar(noise_levels, steady_state_energies, yerr=steady_state_errors, 
+                           marker='o', capsize=3, capthick=1, linewidth=2, markersize=8, 
+                           color=color_array[i], alpha=0.8, label=f'{system_size} qubits')
     
-    # Hide unused subplots
-    for i in range(len(system_sizes), len(axes)):
-        axes[i].set_visible(False)
+    # Add horizontal line at y=0 (ground state)
+    plt.axhline(y=0, color='black', linestyle=':', alpha=0.5, label='Ground state')
     
-    # Add a single colorbar for all subplots
-    norm = colors.Normalize(min(noise_factors), max(noise_factors))
-    sm = cm.ScalarMappable(cmap='viridis', norm=norm)
-    sm.set_array([])
+    plt.xlabel('Noise Factor')
+    plt.ylabel('Steady State Energy Density Above Ground State (ΔE/N)')
+    plt.title('Steady State Energy Density vs Noise Factor')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
     
-    # Add colorbar to the right of the entire figure
-    cbar = plt.colorbar(sm, ax=axes, shrink=0.8, aspect=20, pad=0.25)
-    cbar.set_label('Noise Factor', rotation=270, labelpad=15)
-    cbar.ax.set_title('Noise Level', pad=10)
-    
-    # Adjust layout to make room for colorbar
-    plt.subplots_adjust(right=0.75)
-    plt.savefig(os.path.join(output_dir, 'bond_dimension_vs_sweeps.png'), dpi=300, bbox_inches='tight')
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'steady_state_vs_noise.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -209,8 +215,8 @@ if __name__ == "__main__":
     print("Generating energy density vs sweeps plots...")
     plot_energy_density_vs_sweeps(df, args.output_dir)
     
-    # Generate bond dimension plots
-    print("Generating bond dimension vs sweeps plots...")
-    plot_bond_dimension_vs_sweeps(df, args.output_dir)
+    # Generate steady state vs noise plots
+    print("Generating steady state energy density vs noise factor plots...")
+    plot_steady_state_vs_noise(df, args.output_dir)
     
     print(f"Plots saved to {args.output_dir}/") 
