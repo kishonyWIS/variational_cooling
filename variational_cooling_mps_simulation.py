@@ -80,6 +80,67 @@ def pauli_sys_X(system_qubits, bath_qubits, h):
     return pauli_sys_X
 
 
+def pauli_sys_ZZ_correlations(system_qubits, bath_qubits, max_distance=None):
+    """
+    Generate σᶻσᶻ correlation observables for system qubits, ordered symmetrically
+    around the center as requested: start with i=j=L//2, then alternate between
+    increasing j by 1 and decreasing i by 1 until the edges are reached.
+
+    Args:
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        max_distance: unused; retained for API compatibility
+
+    Returns:
+        list of (pauli_string, coefficient) tuples for σᶻσᶻ correlations
+    """
+    correlations = []
+    center = system_qubits // 2
+
+    # Initialize i and j at the center
+    i = center
+    j = center
+
+    # Helper to append a ZZ observable for a given (i, j)
+    def append_observable(i_idx: int, j_idx: int):
+        # If i == j, σz_i σz_j = I, so use the full identity operator
+        if i_idx == j_idx:
+            pauli_str = "I" * (bath_qubits + system_qubits)
+            correlations.append((pauli_str, 1.0))
+            return
+
+        # Ensure i_idx < j_idx for construction
+        if i_idx > j_idx:
+            i_local, j_local = j_idx, i_idx
+        else:
+            i_local, j_local = i_idx, j_idx
+
+        pauli_str = "I" * bath_qubits
+        # Build system string with Z at i_local and j_local
+        for k in range(system_qubits):
+            if k == i_local or k == j_local:
+                pauli_str += "Z"
+            else:
+                pauli_str += "I"
+        correlations.append((pauli_str, 1.0))
+
+    while (i > 0) or (j < system_qubits - 1):
+        # Then try to decrease i
+        if i > 0:
+            i -= 1
+            append_observable(i, j)
+        
+        # Try to increase j
+        if j < system_qubits - 1:
+            j += 1
+            append_observable(i, j)
+
+
+        # Loop continues until i==0 and j==system_qubits-1
+
+    return correlations
+
+
 def hva_multiple_sweeps(p, system_qubits, bath_qubits, parameters, num_sweeps=1, 
                        reset=True, barrier=True, J=0.4, h=0.6, half=True, open_boundary=1):
     """
@@ -146,11 +207,25 @@ def hva_multiple_sweeps(p, system_qubits, bath_qubits, parameters, num_sweeps=1,
     return qc
 
 
+def get_best_parameters(J, h, p):
+    if J == 0.4 and h == 0.6 and p == 3:
+        best_para = np.array([0.026932368894753006, 0.58775691792609, 1.416345878671235, -0.5847230425335908, 2.108254043912492, 0.9685586146293224, 3.141592653589793, 1.9041272021498745, -0.7655691857212363, 1.463995846549075, 1.062269199105236, 0.450403882505529])
+    elif J == 0.45 and h == 0.55 and p == 3:
+        best_para = np.array([0.2579068792545095, 0.6394665483430537, 1.6000809859220193, -0.4677029550794296, 2.251594733293615, 1.0956802728896018, 3.141592653589793, 1.92078829520187, -0.8305840116887662, 1.2839351722098988, 0.9409858928175381, 0.4159040499271145])
+    elif J == 0.55 and h == 0.45 and p == 3:
+        best_para = np.array([0.13400875081625385, 0.5957504609239808, 1.5744245798463257, -0.6538439040734678, 2.449280029884097, 1.1426198430174903, 3.141592653589793, 2.039226478246942, -0.687046687337217, 1.1995712980171938, 0.9917912365595293, 0.2874759768113605])
+    elif J == 0.6 and h == 0.4 and p == 3:
+        best_para = np.array([0.2758651574486719, 0.39292632015710316, 1.559163323925934, -1.6112927238917285, 3.141592653589793, 1.1794018466868508, 3.141592653589793, 2.0377323161522973, -0.8765720657695009, 1.196657733890989, 0.7242895048133942, 0.39439092939668874])
+    else:
+        raise ValueError(f"No pre-optimized parameters found for J={J}, h={h}, p={p}")
+    return best_para
+
+
 def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_boundary=1, 
                               J=0.4, h=0.6, p=3, num_sweeps=1, 
                               single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
                               training_method="energy", initial_state="zeros", verbose=True, csv_file=None,
-                              bond_dimensions=[32, 64], energy_density_atol=0.01):
+                              bond_dimensions=[32, 64], energy_density_atol=0.01, include_correlations=False):
     """
     Run computations for fixed bond dimensions.
     
@@ -196,13 +271,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
             print("Using E0 = 0 for relative error calculations")
         E0 = 0.0
 
-    # Pre-optimized parameters for J=0.4, 3 layers
-    best_para = np.array([
-        0.026932368894753006, 0.58775691792609, 1.416345878671235, 
-        -0.5847230425335908, 2.108254043912492, 0.9685586146293224, 
-        3.141592653589793, 1.9041272021498745, -0.7655691857212363, 
-        1.463995846549075, 1.062269199105236, 0.450403882505529
-    ])
+    best_para = get_best_parameters(J, h, p)
     
     # Split parameters
     lengths = [p, p, p, p]
@@ -213,7 +282,15 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
     for pauliop in pauli_sys:
         bt_str = (bath_qubits)*"I" + pauliop[0]
         H_observables.append((bt_str, pauliop[1]))
-    observables = SparsePauliOp.from_list(H_observables)
+    
+    # Conditionally add σᶻσᶻ correlation observables
+    if include_correlations:
+        ZZ_correlations = pauli_sys_ZZ_correlations(system_qubits, bath_qubits)
+        all_observables = H_observables + ZZ_correlations
+        observables = SparsePauliOp.from_list(all_observables)
+    else:
+        all_observables = H_observables
+        observables = SparsePauliOp.from_list(all_observables)
     
     # Build circuit for 1 sweep
     total_circ = QuantumCircuit(num_qubits)
@@ -267,10 +344,22 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         values = pub_result.data.evs
         stds = pub_result.data.stds
         
+        # Separate energy and correlation observables
+        num_energy_obs = len(H_observables)
+        energy_values = values[:num_energy_obs]
+        energy_stds = stds[:num_energy_obs]
+        
+        if include_correlations:
+            correlation_values = values[num_energy_obs:]
+            correlation_stds = stds[num_energy_obs:]
+        else:
+            correlation_values = []
+            correlation_stds = []
+        
         # Calculate total energy and its standard deviation
-        energy = sum(values)
+        energy = sum(energy_values)
         energy_diff = energy - E0  # E - E0
-        energy_std = np.sqrt(np.sum(np.array(stds)**2))
+        energy_std = np.sqrt(np.sum(np.array(energy_stds)**2))
         
         # Calculate truncation error as difference from previous lower bond dimension
         truncation_error = np.inf
@@ -293,14 +382,23 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         # Combined standard deviation (shot noise + truncation error)
         combined_std = np.sqrt(energy_std**2 + truncation_error**2)
         
-        results.append({
+        result_dict = {
             'bond_dim': bond_dim,
             'energy': energy,
             'energy_diff': energy_diff,
             'energy_std': energy_std,
             'truncation_error': truncation_error,
-            'combined_std': combined_std
-        })
+            'combined_std': combined_std,
+            'num_correlations': len(correlation_values)
+        }
+        
+        if include_correlations:
+            result_dict.update({
+                'correlation_values': correlation_values,
+                'correlation_stds': correlation_stds
+            })
+        
+        results.append(result_dict)
         
         if verbose:
             print(f"  Energy: {energy:.6f} (E-E0: {energy_diff:.6f}) ± {energy_std:.6f}")
@@ -318,6 +416,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
     # Save results to CSV if specified
     if csv_file is not None:
         for result in results:
+            # Create base result dictionary
             result_dict = {
                 'system_qubits': system_qubits,
                 'bath_qubits': bath_qubits,
@@ -338,8 +437,16 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
                 'combined_std': result['combined_std'],
                 'energy_density_atol': energy_density_atol,
                 'energy_atol': energy_atol,
-                'total_time_minutes': total_time
+                'total_time_minutes': total_time,
+                'num_correlations': result['num_correlations']
             }
+            
+            # Add correlation data as separate columns if correlations are included
+            if include_correlations and 'correlation_values' in result:
+                for i, (corr_val, corr_std) in enumerate(zip(result['correlation_values'], result['correlation_stds'])):
+                    result_dict[f'correlation_{i}_value'] = corr_val
+                    result_dict[f'correlation_{i}_std'] = corr_std
+            
             save_result_to_csv(csv_file, result_dict)
     
     # Create comparison plot only if verbose
@@ -370,6 +477,19 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         plt.xticks(bond_dims)
         
         plt.tight_layout()
+        
+        # Analyze correlations if they are included
+        if include_correlations and results and 'correlation_values' in results[0]:
+            print("\nAnalyzing σᶻσᶻ correlations...")
+            # Use the first result (should have correlations for all bond dimensions)
+            first_result = results[0]
+            if 'correlation_values' in first_result:
+                analyze_correlations(
+                    first_result['correlation_values'], 
+                    first_result['correlation_stds'], 
+                    system_qubits, 
+                    verbose=True
+                )
     
     return results
 
@@ -499,7 +619,7 @@ def sweep_convergence_study(max_sweeps=10, system_qubits=10, bath_qubits=5,
     return sweep_counts, final_energies, final_energy_diffs, final_combined_stds, final_bond_dims, converged_status
 
 
-def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
+def run_parameter_sweep(csv_file, parameter_sets, verbose=False, include_correlations=False):
     """
     Run adaptive precision study for multiple parameter sets and save results to CSV.
     
@@ -507,6 +627,7 @@ def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
         csv_file: path to CSV file to save results
         parameter_sets: list of dictionaries, each containing parameter values
         verbose: if True, print progress and create plots for each run
+        include_correlations: if True, include σᶻσᶻ correlation function calculations
     """
     print(f"Starting parameter sweep with {len(parameter_sets)} parameter sets")
     print(f"Results will be saved to: {csv_file}")
@@ -520,6 +641,7 @@ def run_parameter_sweep(csv_file, parameter_sets, verbose=False):
             fixed_bond_dimension_study(
                 csv_file=csv_file,
                 verbose=verbose,
+                include_correlations=include_correlations,
                 **params
             )
             print(f"✓ Run {i+1} completed successfully")
@@ -566,10 +688,10 @@ def create_example_parameter_sets():
     system_sizes = [(4, 2), (8, 4), (14, 7), (28, 14)]
     
     # Number of sweeps: [0,1,2,3,4,5,6,7,8]
-    num_sweeps_list = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    num_sweeps_list = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     
     # J, h: [(0.4,0.6)]
-    J, h = 0.4, 0.6
+    J_h_list = [(0.6, 0.4), (0.55, 0.45), (0.45, 0.55), (0.4, 0.6)]
     
     # Noise levels: (0.001, 0.01) x [linspace(0, 1, 11)]
     noise_factors = np.linspace(0, 1, 11)
@@ -578,25 +700,91 @@ def create_example_parameter_sets():
     
     # Generate all combinations
     # Reordered loops to prioritize system sizes and sweep counts for better load balancing
-    for noise_factor in noise_factors:
-        for system_qubits, bath_qubits in system_sizes:
+    for J, h in J_h_list:
+        for noise_factor in noise_factors:
             for num_sweeps in num_sweeps_list:
-                parameter_sets.append({
-                    'system_qubits': system_qubits,
-                    'bath_qubits': bath_qubits,
-                    'J': J,
-                    'h': h,
-                    'p': 3,
-                    'num_sweeps': num_sweeps,
-                    'single_qubit_gate_noise': base_single_qubit_noise * noise_factor,
-                    'two_qubit_gate_noise': base_two_qubit_noise * noise_factor,
-                    'training_method': 'energy',
-                    'initial_state': 'zeros',
-                    'bond_dimensions': [32, 64],  # Default bond dimensions for parameter sets
-                    'energy_density_atol': 0.01  # Energy density tolerance for estimator precision
-                })
+                for system_qubits, bath_qubits in system_sizes:
+                    parameter_sets.append({
+                        'system_qubits': system_qubits,
+                        'bath_qubits': bath_qubits,
+                        'J': J,
+                        'h': h,
+                        'p': 3,
+                        'num_sweeps': num_sweeps,
+                        'single_qubit_gate_noise': base_single_qubit_noise * noise_factor,
+                        'two_qubit_gate_noise': base_two_qubit_noise * noise_factor,
+                        'training_method': 'energy',
+                        'initial_state': 'zeros',
+                        'bond_dimensions': [32, 64],  # Default bond dimensions for parameter sets
+                        'energy_density_atol': 0.01  # Energy density tolerance for estimator precision
+                    })
     
     return parameter_sets
+
+
+def analyze_correlations(correlation_values, correlation_stds, system_qubits, verbose=True):
+    """
+    Analyze σᶻσᶻ correlation functions.
+    
+    Args:
+        correlation_values: list of correlation values
+        correlation_stds: list of correlation standard deviations
+        system_qubits: number of system qubits
+        verbose: if True, print analysis and create plots
+    
+    Returns:
+        dict containing correlation analysis results
+    """
+    if len(correlation_values) == 0:
+        return {}
+    
+    # Distances increase by 1 each step with the new (center-outward alternating) ordering
+    # Start with distance 0 (i=j=center), then 1, 2, 3, ... until edges
+    distances = list(range(len(correlation_values)))
+    
+    # Calculate center for display
+    center = system_qubits // 2
+    
+    # Create analysis results
+    analysis = {
+        'distances': distances,
+        'correlation_values': correlation_values,
+        'correlation_stds': correlation_stds,
+        'center': center,
+        'system_qubits': system_qubits
+    }
+    
+    if verbose:
+        print("\n" + "="*50)
+        print("σᶻσᶻ Correlation Function Analysis")
+        print("="*50)
+        print(f"System qubits: {system_qubits}")
+        print(f"Center qubit: {center}")
+        print(f"Number of correlations: {len(correlation_values)}")
+        print()
+        
+        print("Distance | Correlation | Std Dev")
+        print("-" * 30)
+        for i, (dist, val, std) in enumerate(zip(distances, correlation_values, correlation_stds)):
+            print(f"{dist:8d} | {val:10.6f} | {std:7.6f}")
+        
+        # Create correlation plot
+        plt.figure(figsize=(10, 6))
+        plt.errorbar(distances, correlation_values, yerr=correlation_stds, 
+                    marker='o', capsize=5, capthick=2, linewidth=2, markersize=8)
+        plt.xlabel('Distance from center', fontsize=12)
+        plt.ylabel('σᶻσᶻ Correlation', fontsize=12)
+        plt.title(f'σᶻσᶻ Correlation Function\n({system_qubits} system qubits)', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.axhline(y=0, color='black', linestyle=':', alpha=0.5)
+        
+        # Set x-axis ticks to match actual distances
+        plt.xticks(distances)
+        plt.tight_layout()
+        
+        print(f"\nCorrelation plot created for {system_qubits} qubits")
+    
+    return analysis
 
 
 if __name__ == "__main__":
@@ -617,6 +805,8 @@ if __name__ == "__main__":
     parser.add_argument('--sweep-study', action='store_true', help='Run sweep convergence study instead of parameter sweep')
     parser.add_argument('--bond-dims', type=str, default='32,64', help='Comma-separated list of bond dimensions to test (default: 32,64)')
     parser.add_argument('--energy-density-atol', type=float, default=0.01, help='Energy density tolerance for estimator precision (default: 0.01)')
+    parser.add_argument('--include-correlations', action='store_true', help='Include σᶻσᶻ correlation function calculations')
+    parser.add_argument('--analyze-correlations', action='store_true', help='Analyze and plot correlation functions (requires --include-correlations)')
     
     args = parser.parse_args()
     
@@ -642,7 +832,7 @@ if __name__ == "__main__":
             csv_file = os.path.join(args.output_dir, f"results_job_{args.job_id:03d}.csv")
         
         # Run parameter sweep for this job
-        run_parameter_sweep(csv_file, parameter_sets, verbose=args.verbose)
+        run_parameter_sweep(csv_file, parameter_sets, verbose=args.verbose, include_correlations=args.include_correlations)
         
         print(f"Job {args.job_id} completed. Results saved to {csv_file}")
         
@@ -671,7 +861,7 @@ if __name__ == "__main__":
         parameter_sets = create_example_parameter_sets()
         
         # Run parameter sweep
-        run_parameter_sweep(csv_file, parameter_sets, verbose=args.verbose)
+        run_parameter_sweep(csv_file, parameter_sets, verbose=args.verbose, include_correlations=args.include_correlations)
         
         print(f"\nResults saved to {csv_file}")
         print("CSV columns: system_qubits, bath_qubits, J, h, num_sweeps, p, training_method,")

@@ -69,7 +69,7 @@ def main():
     
     try:
         # Calculate ground state energy
-        energy = calculate_ising_ground_state(N=10, J=0.4, h=0.6, bond_dim=30, max_iter=200, cyclic=False)
+        energy = calculate_ising_ground_state(N=28, J=0.45, h=0.55, bond_dim=30, max_iter=200, cyclic=False)
         print(f"Ground state energy: {energy:.8f}")
 
     except Exception as e:

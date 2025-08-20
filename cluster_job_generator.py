@@ -7,7 +7,84 @@ This script generates LSF job files to run different parameter sets in separate 
 import json
 import os
 import sys
+import pandas as pd
+import numpy as np
 from variational_cooling_mps_simulation import create_example_parameter_sets
+
+
+def load_existing_results(csv_file):
+    """Load existing results from CSV file."""
+    if not os.path.exists(csv_file):
+        return pd.DataFrame()
+    
+    try:
+        df = pd.read_csv(csv_file)
+        return df
+    except Exception as e:
+        print(f"Warning: Could not read CSV file {csv_file}: {e}")
+        return pd.DataFrame()
+
+
+def filter_missing_combinations(parameter_sets, existing_df):
+    """
+    Filter parameter sets to only include combinations that are missing from existing results.
+    
+    Args:
+        parameter_sets: list of parameter dictionaries
+        existing_df: DataFrame of existing results
+    
+    Returns:
+        list of parameter dictionaries for missing combinations
+    """
+    if existing_df.empty:
+        print("No existing results found, running all parameter sets")
+        return parameter_sets
+    
+    # Create a set of existing combinations for fast lookup
+    existing_combinations = set()
+    
+    for _, row in existing_df.iterrows():
+        try:
+            # Skip error rows
+            if (row.get('ground_state_energy') == 'ERROR' or 
+                pd.isna(row.get('ground_state_energy')) or
+                str(row.get('ground_state_energy')).startswith('ERROR')):
+                continue
+                
+            # Create a tuple of key parameters for comparison
+            # Round floating point values to handle precision issues
+            combo = (
+                int(float(row['system_qubits'])),
+                int(float(row['bath_qubits'])),
+                round(float(row['J']), 6),
+                round(float(row['h']), 6),
+                int(float(row['num_sweeps'])),
+                round(float(row['single_qubit_gate_noise']), 6),
+                round(float(row['two_qubit_gate_noise']), 6)
+            )
+            existing_combinations.add(combo)
+        except (ValueError, KeyError, TypeError) as e:
+            # Skip rows with conversion errors
+            continue
+    
+    # Filter parameter sets to only include missing combinations
+    missing_combinations = []
+    
+    for params in parameter_sets:
+        combo = (
+            params['system_qubits'],
+            params['bath_qubits'],
+            round(params['J'], 6),
+            round(params['h'], 6),
+            params['num_sweeps'],
+            round(params['single_qubit_gate_noise'], 6),
+            round(params['two_qubit_gate_noise'], 6)
+        )
+        
+        if combo not in existing_combinations:
+            missing_combinations.append(params)
+    
+    return missing_combinations
 
 
 def create_job_script(job_id, parameter_sets, output_dir="jobs", 
@@ -61,7 +138,7 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 mkdir -p results
 
 # Run the parameter sweep for this job
-python3 variational_cooling_mps_simulation.py --job-id {job_id} --param-file {param_file} --output-dir results --shared-csv results/variational_cooling_results.csv --bond-dims {bond_dims} --energy-density-atol {energy_density_atol}
+python3 variational_cooling_mps_simulation.py --job-id {job_id} --param-file {param_file} --output-dir results --shared-csv results/variational_cooling_results.csv --bond-dims {bond_dims} --energy-density-atol {energy_density_atol} --include-correlations --analyze-correlations
 
 echo "Job {job_id} completed at $(date)"
 """)
@@ -175,7 +252,7 @@ def create_monitor_script(job_scripts, output_dir="jobs"):
 
 if __name__ == "__main__":
     # Configuration
-    JOBS_PER_FILE = 10  # Number of parameter sets per job (396 total / 10 = ~40 jobs)
+    JOBS_PER_FILE = 8
     OUTPUT_DIR = "jobs"
     JOB_NAME = "variational_cooling"
     WALL_TIME = "24:00"
@@ -184,10 +261,12 @@ if __name__ == "__main__":
     QUEUE = "berg"
     BOND_DIMS = "32,64"
     ENERGY_DENSITY_ATOL = "0.01"  # Energy density tolerance for estimator precision
+    RESULTS_CSV = "results/variational_cooling_results.csv"
     
     print("Generating cluster jobs for variational cooling parameter sweep...")
     print(f"Jobs per file: {JOBS_PER_FILE}")
     print(f"Output directory: {OUTPUT_DIR}")
+    print(f"Results CSV: {RESULTS_CSV}")
     
     # Clean up existing job files
     if os.path.exists(OUTPUT_DIR):
@@ -197,13 +276,57 @@ if __name__ == "__main__":
     
     print()
     
-    # Get parameter sets
-    parameter_sets = create_example_parameter_sets()
-    print(f"Total parameter sets: {len(parameter_sets)}")
+    # Load existing results
+    print("Loading existing results...")
+    existing_df = load_existing_results(RESULTS_CSV)
+    if not existing_df.empty:
+        print(f"Found {len(existing_df)} existing results")
+    else:
+        print("No existing results found")
+    
+    # Get all parameter sets
+    print("Generating all parameter sets...")
+    all_parameter_sets = create_example_parameter_sets()
+    print(f"Total parameter sets: {len(all_parameter_sets)}")
+    
+    # Filter to only missing combinations
+    print("Filtering to missing combinations...")
+    missing_parameter_sets = filter_missing_combinations(all_parameter_sets, existing_df)
+    print(f"Missing parameter sets: {len(missing_parameter_sets)}")
+    
+    if len(missing_parameter_sets) == 0:
+        print("No missing combinations found! All parameter sets are already completed.")
+        sys.exit(0)
+    
+    # Print summary of missing combinations
+    print("\nMissing combinations summary:")
+    print("=" * 50)
+    
+    # Summary by J,h values
+    J_h_list = [(0.6, 0.4), (0.55, 0.45), (0.45, 0.55), (0.4, 0.6)]
+    for J, h in J_h_list:
+        count = sum(1 for params in missing_parameter_sets if params['J'] == J and params['h'] == h)
+        print(f"J={J}, h={h}: {count} missing combinations")
+    
+    # Summary by system size
+    system_sizes = [(4, 2), (8, 4), (14, 7), (28, 14)]
+    for sys_qubits, bath_qubits in system_sizes:
+        count = sum(1 for params in missing_parameter_sets 
+                   if params['system_qubits'] == sys_qubits and params['bath_qubits'] == bath_qubits)
+        print(f"{sys_qubits}+{bath_qubits} qubits: {count} missing combinations")
+    
+    # Summary by sweep count
+    sweep_counts = sorted(set(params['num_sweeps'] for params in missing_parameter_sets))
+    for sweep in sweep_counts:
+        count = sum(1 for params in missing_parameter_sets if params['num_sweeps'] == sweep)
+        print(f"{sweep} sweeps: {count} missing combinations")
+    
+    print("=" * 50)
     
     # Generate job files
+    print(f"\nGenerating job files for {len(missing_parameter_sets)} missing combinations...")
     job_scripts = generate_jobs(
-        parameter_sets, 
+        missing_parameter_sets, 
         jobs_per_file=JOBS_PER_FILE,
         output_dir=OUTPUT_DIR,
         job_name=JOB_NAME,
