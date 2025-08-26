@@ -17,8 +17,8 @@ def test_correlations():
     
     # Test parameters (small system, minimal sweeps)
     test_params = {
-        'system_qubits': 4,
-        'bath_qubits': 2,
+        'system_qubits': 8,
+        'bath_qubits': 4,
         'J': 0.6,
         'h': 0.4,
         'num_sweeps': 10,  # Just 1 sweep for quick testing
@@ -27,7 +27,7 @@ def test_correlations():
         'two_qubit_gate_noise': 0.0,
         'training_method': 'energy',
         'initial_state': 'zeros',
-        'bond_dimensions': [32, 64],  # Test both bond dimensions
+        'bond_dimensions': [32],  # Test both bond dimensions
         'energy_density_atol': 0.01,
         'include_correlations': True
     }

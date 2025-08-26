@@ -18,7 +18,7 @@ def test_your_parameters():
     J_h_list = [(0.6, 0.4), (0.55, 0.45), (0.45, 0.55), (0.4, 0.6)]
     num_sweeps = 12
     noise_factor = 0
-    system_size = (8, 4)
+    system_size = (28, 14)
     
     print("="*70)
     print("Testing Your Specific Parameter Set")
@@ -45,7 +45,7 @@ def test_your_parameters():
             'two_qubit_gate_noise': 0.0,
             'training_method': 'energy',
             'initial_state': 'zeros',
-            'bond_dimensions': [32, 64],  # Test both bond dimensions
+            'bond_dimensions': [32,64],  # Test both bond dimensions
             'energy_density_atol': 0.01,
             'include_correlations': True
         }
@@ -53,46 +53,38 @@ def test_your_parameters():
         # Use a separate test CSV file for each combination
         test_csv = f"test_your_params_J{J}_h{h}.csv"
         
-        try:
-            # Remove test file if it exists
-            if os.path.exists(test_csv):
-                os.remove(test_csv)
-            
-            # Run the simulation
-            results = fixed_bond_dimension_study(
-                csv_file=test_csv,
-                verbose=True,
-                **test_params
-            )
-            
-            print(f"✓ Completed successfully!")
-            print(f"Results saved to: {test_csv}")
-            
-            # Verify correlation columns
-            if os.path.exists(test_csv):
-                import pandas as pd
-                df = pd.read_csv(test_csv)
-                correlation_cols = [col for col in df.columns if 'correlation_' in col]
-                print(f"  Correlation columns: {len(correlation_cols)}")
-                
-                # Show first few correlation values
-                if len(df) > 0:
-                    first_row = df.iloc[0]
-                    print("  First few correlations:")
-                    for i in range(min(3, len(correlation_cols)//2)):
-                        val_col = f'correlation_{i}_value'
-                        if val_col in df.columns:
-                            val = first_row[val_col]
-                            print(f"    Correlation {i}: {val:.6f}")
-            
-            # Clean up test file
-            if os.path.exists(test_csv):
-                os.remove(test_csv)
-                print(f"  ✓ Test file cleaned up")
-            
-        except Exception as e:
-            print(f"✗ Failed: {e}")
+
+        # Remove test file if it exists
+        if os.path.exists(test_csv):
+            os.remove(test_csv)
         
+        # Run the simulation
+        results = fixed_bond_dimension_study(
+            csv_file=test_csv,
+            verbose=True,
+            **test_params
+        )
+        
+        print(f"✓ Completed successfully!")
+        print(f"Results saved to: {test_csv}")
+        
+        # Verify correlation columns
+        if os.path.exists(test_csv):
+            import pandas as pd
+            df = pd.read_csv(test_csv)
+            correlation_cols = [col for col in df.columns if 'correlation_' in col]
+            print(f"  Correlation columns: {len(correlation_cols)}")
+            
+            # Show first few correlation values
+            if len(df) > 0:
+                first_row = df.iloc[0]
+                print("  First few correlations:")
+                for i in range(min(3, len(correlation_cols)//2)):
+                    val_col = f'correlation_{i}_value'
+                    if val_col in df.columns:
+                        val = first_row[val_col]
+                        print(f"    Correlation {i}: {val:.6f}")
+                    
         print()
     
     print("="*70)
