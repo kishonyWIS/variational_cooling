@@ -376,6 +376,122 @@ def plot_dual_points_vs_system_size(df, dual_pairs, output_dir="plots"):
         plt.show()
 
 
+def plot_steady_state_vs_error_rate_all_jh(df, output_dir="plots"):
+    """
+    Plot steady state energy density vs error rate for all J,h combinations using the same color scheme as plot_correlations.py.
+    
+    Args:
+        df: DataFrame with results data
+        output_dir: Output directory for plots
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Calculate energy density above ground state for all data
+    df['ground_state_energy_density'] = df['ground_state_energy'] / df['system_qubits']
+    df['energy_density_above_ground'] = (df['energy'] - df['ground_state_energy']) / df['system_qubits']
+    df['energy_density_error'] = df['combined_std'] / df['system_qubits']
+    
+    # Get unique J,h combinations and sort by J values (same as plot_correlations.py)
+    jh_combinations = df[['J', 'h']].drop_duplicates().values
+    jh_combinations = sorted(jh_combinations, key=lambda x: x[0])  # Sort by J values
+    
+    if len(jh_combinations) == 0:
+        print("No J,h combinations found in data")
+        return
+    
+    print(f"Plotting steady state vs error rate for {len(jh_combinations)} J,h combinations")
+    
+    # Create colorbar using the same scheme as plot_correlations.py
+    j_values = [jh[0] for jh in jh_combinations]
+    norm = plt.Normalize(min(j_values), max(j_values))
+    cmap = plt.cm.rainbow  # Same colormap as plot_correlations.py
+    
+    # Create figure
+    plt.figure(figsize=(12, 8))
+    
+    # Get unique system sizes and noise factors
+    system_sizes = sorted(df['system_qubits'].unique())
+    noise_factors = sorted(df['noise_factor'].unique())
+    
+    # For each J,h combination, plot steady state energy density vs error rate (largest system size only)
+    legend_handles = []
+    legend_labels = []
+    
+    for jh_idx, (J, h) in enumerate(jh_combinations):
+        print(f"Processing J={J}, h={h}")
+        
+        # Filter data for this J,h combination
+        subset = df[(df['J'] == J) & (df['h'] == h)]
+        
+        if len(subset) == 0:
+            print(f"No data found for J={J}, h={h}")
+            continue
+        
+        # Use only the largest system size
+        largest_system_size = max(system_sizes)
+        system_subset = subset[subset['system_qubits'] == largest_system_size]
+        
+        if len(system_subset) > 0:
+            steady_state_energies = []
+            steady_state_errors = []
+            error_rates = []
+            
+            # For each noise factor, find the energy density at the maximum number of sweeps (steady state)
+            for noise_factor in noise_factors:
+                noise_subset = system_subset[system_subset['noise_factor'] == noise_factor]
+                
+                if len(noise_subset) > 0:
+                    # Find the maximum number of sweeps for this noise level
+                    max_sweeps = noise_subset['num_sweeps'].max()
+                    
+                    # Get the data point with maximum sweeps (steady state)
+                    steady_state_data = noise_subset[noise_subset['num_sweeps'] == max_sweeps]
+                    
+                    if len(steady_state_data) > 0:
+                        # Take the mean if there are multiple points with same max sweeps
+                        steady_state_energies.append(steady_state_data['energy_density_above_ground'].mean())
+                        steady_state_errors.append(steady_state_data['energy_density_error'].mean())
+                        # Convert noise factor back to actual error rate
+                        error_rate = noise_factor * 0.001  # Base noise was 0.001
+                        error_rates.append(error_rate)
+            
+            if len(steady_state_energies) > 0:
+                # Get color from colorbar (same as plot_correlations.py)
+                color = cmap(norm(J))
+                
+                # Plot with error bars
+                lines = plt.errorbar(error_rates, steady_state_energies, yerr=steady_state_errors, 
+                                   marker='o', capsize=3, capthick=1, linewidth=2, markersize=8, 
+                                   color=color, alpha=0.8, label=f'J={J}, h={h}')
+                
+                # Store for legend (get the line object from the errorbar tuple)
+                legend_handles.append(lines[0])
+                legend_labels.append(f'J={J}, h={h}')
+    
+    # Add horizontal line at y=0 (ground state)
+    plt.axhline(y=0, color='black', linestyle=':', alpha=0.5, label='Ground state')
+    
+    plt.xlabel('Noise Factor', fontsize=16)
+    plt.ylabel('Steady State Energy Density Above Ground State (ΔE/N)', fontsize=16)
+    plt.grid(True, alpha=0.3)
+    
+    # Add legend (same as plot_correlations.py)
+    plt.legend(handles=legend_handles, labels=legend_labels, loc='best', fontsize=16)
+    
+    # Set font sizes for ticks
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    filename = 'steady_state_vs_error_rate_all_jh.png'
+    plt.savefig(os.path.join(output_dir, filename), dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"Plot saved as {os.path.join(output_dir, filename)}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Plot energy density vs sweeps for variational cooling results')
     parser.add_argument('--csv-file', type=str, default='results/variational_cooling_results.csv',
@@ -439,6 +555,10 @@ if __name__ == "__main__":
     else:
         print("No dual pairs with available data found.")
     
+    # Generate the new combined plot
+    print("\n=== Generating steady state vs error rate plot for all J,h combinations ===")
+    plot_steady_state_vs_error_rate_all_jh(df, args.output_dir)
+    
     print(f"\nAll plots saved to {args.output_dir}/")
     print("Generated files:")
     for J, h in J_h_combinations:
@@ -449,4 +569,6 @@ if __name__ == "__main__":
         for i, (point1, point2) in enumerate(available_pairs):
             J1, h1 = point1
             J2, h2 = point2
-            print(f"  dual_points_vs_system_size_pair{i+1}_J{J1}_h{h1}_J{J2}_h{h2}.png") 
+            print(f"  dual_points_vs_system_size_pair{i+1}_J{J1}_h{h1}_J{J2}_h{h2}.png")
+    
+    print("  steady_state_vs_error_rate_all_jh.png") 
