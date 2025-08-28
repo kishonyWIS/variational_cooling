@@ -28,7 +28,7 @@ def test_correlations():
         'training_method': 'energy',
         'initial_state': 'zeros',
         'bond_dimensions': [32],  # Test both bond dimensions
-        'energy_density_atol': 0.01,
+
         'include_correlations': True
     }
     

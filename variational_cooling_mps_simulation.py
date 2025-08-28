@@ -14,8 +14,7 @@ from qiskit.quantum_info import SparsePauliOp, Operator, Statevector
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit_aer.noise import NoiseModel, depolarizing_error
 from qiskit_aer import AerSimulator
-from qiskit_ibm_runtime import EstimatorV2 as Estimator
-from qiskit_ibm_runtime.options import EstimatorOptions
+
 
 
 def save_result_to_csv(csv_file, result_dict):
@@ -52,6 +51,16 @@ def get_noisy_simulator(single_qubit_gate_noise=0.0003, two_qubit_gate_noise=0.0
         matrix_product_state_max_bond_dimension=max_bond_dimension,
     )
     return simulator
+
+
+def get_fixed_shots():
+    """
+    Get a fixed number of shots.
+    
+    Returns:
+        int: fixed number of shots to use
+    """
+    return 100
 
 
 def pauli_sys_ZZ(system_qubits, bath_qubits, J, open_boundary=1):
@@ -225,7 +234,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
                               J=0.4, h=0.6, p=3, num_sweeps=1, 
                               single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
                               training_method="energy", initial_state="zeros", verbose=True, csv_file=None,
-                              bond_dimensions=[32, 64], energy_density_atol=0.01, include_correlations=False):
+                              bond_dimensions=[32, 64], include_correlations=False):
     """
     Run computations for fixed bond dimensions.
     
@@ -245,7 +254,6 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         verbose: if True, print progress and create plots
         csv_file: path to CSV file to save results (thread-safe)
         bond_dimensions: list of bond dimensions to test (default: [32, 64])
-        energy_density_atol: absolute tolerance for energy density - std/system_qubits must be smaller than this
     """
     
     num_qubits = system_qubits + bath_qubits
@@ -254,10 +262,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
     pauli_sys = pauli_sys_ZZ(system_qubits, 0, J, open_boundary) + pauli_sys_X(system_qubits, 0, h)
     H_sys = SparsePauliOp.from_list(pauli_sys)
     
-    # Convert energy density tolerance to energy tolerance
-    energy_atol = energy_density_atol * system_qubits
-    # Convert energy tolerance to precision for estimator
-    energy_precision = energy_atol / np.sqrt(len(pauli_sys))
+
     
     # Calculate ground state energy using DMRG
     if verbose:
@@ -332,17 +337,61 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         transpiled_circuit = pm.run(total_circ)
         mapped_observables = [observable.apply_layout(transpiled_circuit.layout) for observable in observables]
         
-        # Setup estimator with precision based on energy_atol
-        options = EstimatorOptions(
-            default_precision=energy_precision
-        )
-        estimator = Estimator(mode=backend, options=options)
+        # Get fixed number of shots
+        shots = get_fixed_shots()
         
-        # Run simulation
-        job = estimator.run([(transpiled_circuit, mapped_observables)])
-        pub_result = job.result()[0]
-        values = pub_result.data.evs
-        stds = pub_result.data.stds
+        if verbose:
+            print(f"  Using {shots} shots")
+        
+        # Add save instructions for all observables with pershot=True
+        circuit_with_saves = transpiled_circuit.copy()
+        for i, observable in enumerate(mapped_observables):  # Use mapped observables to match transpiled circuit
+            if verbose:
+                print(f"    Observable {i}: {observable}")
+                print(f"      Number of qubits: {observable.num_qubits}")
+            
+            # The observable expects to act on all qubits in its dimension
+            # We need to provide the qubit indices that match the observable's structure
+            qubit_indices = list(range(observable.num_qubits))
+            
+            # Use pershot=True to get individual shot data
+            circuit_with_saves.save_expectation_value(observable, qubit_indices, label=f"obs_{i}", pershot=True)
+        
+        # Run simulation with calculated shots
+        job = backend.run(circuit_with_saves, shots=shots)
+        result = job.result()
+        
+        # Extract expectation values and standard deviations from individual shot data
+        values = []
+        stds = []
+        
+        # With pershot=True, we should get individual shot data
+        traj_data = result.data()
+        
+        if verbose:
+            print(f"  Extracting variance from {shots} shots...")
+        
+        # Process each observable
+        for i in range(len(observables)):
+            label = f"obs_{i}"
+            
+            # Extract the data for this observable
+            obs_data = traj_data[label]
+                        
+            # Check if we have an array with multiple values
+            if isinstance(obs_data, np.ndarray) and len(obs_data) > 1:
+                # We have individual shot data
+                shot_values = obs_data
+                mean_val = np.mean(shot_values)
+                variance = np.var(shot_values, ddof=1)  # sample variance
+                # Convert to standard error of the mean: std_of_shots / sqrt(shots)
+                std_val = np.sqrt(variance / shots)
+                
+            values.append(mean_val)
+            stds.append(std_val)
+            
+            if verbose:
+                print(f"    Observable {i}: mean={mean_val:.6f}, std={std_val:.6f}")
         
         # Separate energy and correlation observables
         num_energy_obs = len(H_observables)
@@ -384,6 +433,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         
         result_dict = {
             'bond_dim': bond_dim,
+            'shots': shots,
             'energy': energy,
             'energy_diff': energy_diff,
             'energy_std': energy_std,
@@ -404,6 +454,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
             print(f"  Energy: {energy:.6f} (E-E0: {energy_diff:.6f}) ± {energy_std:.6f}")
             print(f"  Truncation error: {truncation_error:.6f}")
             print(f"  Combined std: {combined_std:.6f}")
+            print(f"  Shots used: {shots}")
     
     total_time = (time.time() - start_time) / 60  # in minutes
     
@@ -411,7 +462,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         print("=" * 70)
         print(f"Fixed bond dimension study completed in {total_time:.2f} minutes!")
         for result in results:
-            print(f"Bond dim {result['bond_dim']}: E-E0 = {result['energy_diff']:.6f} ± {result['combined_std']:.6f} (shot: {result['energy_std']:.6f}, trunc: {result['truncation_error']:.6f})")
+            print(f"Bond dim {result['bond_dim']}: E-E0 = {result['energy_diff']:.6f} ± {result['combined_std']:.6f} (shot: {result['energy_std']:.6f}, trunc: {result['truncation_error']:.6f}, shots: {result['shots']})")
     
     # Save results to CSV if specified
     if csv_file is not None:
@@ -430,13 +481,13 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
                 'initial_state': initial_state,
                 'ground_state_energy': E0,
                 'bond_dim': result['bond_dim'],
+                'shots': result['shots'],
                 'energy': result['energy'],
                 'energy_diff': result['energy_diff'],
                 'energy_std': result['energy_std'],
                 'truncation_error': result['truncation_error'],
                 'combined_std': result['combined_std'],
-                'energy_density_atol': energy_density_atol,
-                'energy_atol': energy_atol,
+
                 'total_time_minutes': total_time,
                 'num_correlations': result['num_correlations']
             }
@@ -497,7 +548,7 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
 def sweep_convergence_study(max_sweeps=10, system_qubits=10, bath_qubits=5, 
                           half=True, open_boundary=1, J=0.4, h=0.6, p=3,
                           single_qubit_gate_noise=0., two_qubit_gate_noise=0.,
-                          bond_dimensions=[32, 64], energy_density_atol=0.01):
+                          bond_dimensions=[32, 64]):
     """
     Study energy convergence as a function of number of sweeps using fixed bond dimensions.
     
@@ -513,7 +564,6 @@ def sweep_convergence_study(max_sweeps=10, system_qubits=10, bath_qubits=5,
         single_qubit_gate_noise: single qubit gate noise parameter
         two_qubit_gate_noise: two qubit gate noise parameter
         bond_dimensions: list of bond dimensions to test (default: [32, 64])
-        energy_density_atol: absolute tolerance for energy density - std/system_qubits must be smaller than this
     """
     
     print(f"Sweep convergence study (max_sweeps: {max_sweeps})...")
@@ -536,7 +586,7 @@ def sweep_convergence_study(max_sweeps=10, system_qubits=10, bath_qubits=5,
                 system_qubits=system_qubits, bath_qubits=bath_qubits,
                 half=half, open_boundary=open_boundary, J=J, h=h, p=p, num_sweeps=num_sweeps,
                 single_qubit_gate_noise=single_qubit_gate_noise, two_qubit_gate_noise=two_qubit_gate_noise,
-                bond_dimensions=bond_dimensions, energy_density_atol=energy_density_atol
+                bond_dimensions=bond_dimensions
             )
             
             # Store results for both bond dimensions
@@ -716,7 +766,7 @@ def create_example_parameter_sets():
                         'training_method': 'energy',
                         'initial_state': 'zeros',
                         'bond_dimensions': [32, 64],  # Default bond dimensions for parameter sets
-                        'energy_density_atol': 0.01  # Energy density tolerance for estimator precision
+
                     })
     
     return parameter_sets
@@ -804,15 +854,14 @@ if __name__ == "__main__":
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output and plots')
     parser.add_argument('--sweep-study', action='store_true', help='Run sweep convergence study instead of parameter sweep')
     parser.add_argument('--bond-dims', type=str, default='32,64', help='Comma-separated list of bond dimensions to test (default: 32,64)')
-    parser.add_argument('--energy-density-atol', type=float, default=0.01, help='Energy density tolerance for estimator precision (default: 0.01)')
+
     parser.add_argument('--include-correlations', action='store_true', help='Include σᶻσᶻ correlation function calculations')
     parser.add_argument('--analyze-correlations', action='store_true', help='Analyze and plot correlation functions (requires --include-correlations)')
     
     args = parser.parse_args()
     
-    # Parse bond dimensions and energy density tolerance
+    # Parse bond dimensions
     bond_dimensions = [int(x.strip()) for x in args.bond_dims.split(',')]
-    energy_density_atol = args.energy_density_atol
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -850,8 +899,7 @@ if __name__ == "__main__":
             p=3,
             single_qubit_gate_noise=0.0003,
             two_qubit_gate_noise=0.003,
-            bond_dimensions=bond_dimensions,
-            energy_density_atol=energy_density_atol
+            bond_dimensions=bond_dimensions
         ) 
         plt.show()
         
@@ -866,4 +914,4 @@ if __name__ == "__main__":
         print(f"\nResults saved to {csv_file}")
         print("CSV columns: system_qubits, bath_qubits, J, h, num_sweeps, p, training_method,")
         print("             single_qubit_gate_noise, two_qubit_gate_noise, initial_state,")
-        print("             ground_state_energy, bond_dim, energy, energy_diff, energy_std, truncation_error, combined_std, energy_atol, total_time_minutes")
+        print("             ground_state_energy, bond_dim, shots, energy, energy_diff, energy_std, truncation_error, combined_std, energy_atol, total_time_minutes")
