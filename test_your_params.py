@@ -18,7 +18,7 @@ def test_your_parameters():
     J_h_list = [(0.6, 0.4), (0.55, 0.45), (0.45, 0.55), (0.4, 0.6)]
     num_sweeps = 12
     noise_factor = 0
-    system_size = (16,8) #(28, 14)
+    system_size = (8,4) #(28, 14)
     
     print("="*70)
     print("Testing Your Specific Parameter Set")

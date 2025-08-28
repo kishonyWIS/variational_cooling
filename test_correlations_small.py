@@ -44,7 +44,7 @@ def test_correlations():
     # Test 1: Verify correlation generation
     print("Test 1: Correlation Generation")
     print("-" * 30)
-    correlations = pauli_sys_ZZ_correlations(
+    correlations, indices = pauli_sys_ZZ_correlations(
         test_params['system_qubits'], 
         test_params['bath_qubits']
     )
@@ -53,7 +53,8 @@ def test_correlations():
     # Show first few correlations
     print("\nFirst 5 correlations:")
     for i, (pauli_str, coeff) in enumerate(correlations[:5]):
-        print(f"  {i}: {pauli_str} (coeff: {coeff})")
+        idx_i, idx_j = indices[i]
+        print(f"  {i}: {pauli_str} (coeff: {coeff}) -> Z_{idx_i}Z_{idx_j}")
     
     if len(correlations) > 5:
         print(f"  ... and {len(correlations) - 5} more")

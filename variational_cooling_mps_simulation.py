@@ -101,9 +101,11 @@ def pauli_sys_ZZ_correlations(system_qubits, bath_qubits, max_distance=None):
         max_distance: unused; retained for API compatibility
 
     Returns:
-        list of (pauli_string, coefficient) tuples for σᶻσᶻ correlations
+        tuple: (list of (pauli_string, coefficient) tuples for σᶻσᶻ correlations,
+                list of (i, j) index pairs for each correlation)
     """
     correlations = []
+    indices = []
     center = system_qubits // 2
 
     # Initialize i and j at the center
@@ -112,12 +114,6 @@ def pauli_sys_ZZ_correlations(system_qubits, bath_qubits, max_distance=None):
 
     # Helper to append a ZZ observable for a given (i, j)
     def append_observable(i_idx: int, j_idx: int):
-        # If i == j, σz_i σz_j = I, so use the full identity operator
-        if i_idx == j_idx:
-            pauli_str = "I" * (bath_qubits + system_qubits)
-            correlations.append((pauli_str, 1.0))
-            return
-
         # Ensure i_idx < j_idx for construction
         if i_idx > j_idx:
             i_local, j_local = j_idx, i_idx
@@ -132,6 +128,7 @@ def pauli_sys_ZZ_correlations(system_qubits, bath_qubits, max_distance=None):
             else:
                 pauli_str += "I"
         correlations.append((pauli_str, 1.0))
+        indices.append((i_local, j_local))
 
     while (i > 0) or (j < system_qubits - 1):
         # Then try to decrease i
@@ -144,10 +141,9 @@ def pauli_sys_ZZ_correlations(system_qubits, bath_qubits, max_distance=None):
             j += 1
             append_observable(i, j)
 
-
         # Loop continues until i==0 and j==system_qubits-1
 
-    return correlations
+    return correlations, indices
 
 
 def hva_multiple_sweeps(p, system_qubits, bath_qubits, parameters, num_sweeps=1, 
@@ -269,7 +265,14 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         print("Calculating ground state energy using DMRG...")
     try:
         from ising_ground_state_dmrg import calculate_ising_ground_state
-        E0 = calculate_ising_ground_state(N=system_qubits, J=J, h=h, bond_dim=50, max_iter=200, cyclic=False)
+        E0_result = calculate_ising_ground_state(N=system_qubits, J=J, h=h, bond_dim=50, max_iter=200, cyclic=False)
+        # Extract the energy value from the result
+        if hasattr(E0_result, 'energy'):
+            E0 = E0_result.energy
+        elif hasattr(E0_result, '__getitem__'):
+            E0 = E0_result[0]  # Assume first element is energy
+        else:
+            E0 = float(E0_result)  # Try to convert to float
     except Exception as e:
         if verbose:
             print(f"Warning: Could not calculate ground state energy: {e}")
@@ -288,10 +291,23 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         bt_str = (bath_qubits)*"I" + pauliop[0]
         H_observables.append((bt_str, pauliop[1]))
     
-    # Conditionally add σᶻσᶻ correlation observables
+    # Conditionally add σᶻσᶻ correlation observables and single-qubit Z observables
     if include_correlations:
-        ZZ_correlations = pauli_sys_ZZ_correlations(system_qubits, bath_qubits)
-        all_observables = H_observables + ZZ_correlations
+        ZZ_correlations, ZZ_indices = pauli_sys_ZZ_correlations(system_qubits, bath_qubits)
+        
+        # Add single-qubit Z observables for each system qubit (needed for connected correlations)
+        single_Z_observables = []
+        for i in range(system_qubits):
+            pauli_str = "I" * bath_qubits
+            # Build system string with Z at position i
+            for k in range(system_qubits):
+                if k == i:
+                    pauli_str += "Z"
+                else:
+                    pauli_str += "I"
+            single_Z_observables.append((pauli_str, 1.0))
+        
+        all_observables = H_observables + ZZ_correlations + single_Z_observables
         observables = SparsePauliOp.from_list(all_observables)
     else:
         all_observables = H_observables
@@ -399,8 +415,42 @@ def fixed_bond_dimension_study(system_qubits=10, bath_qubits=5, half=True, open_
         energy_stds = stds[:num_energy_obs]
         
         if include_correlations:
-            correlation_values = values[num_energy_obs:]
-            correlation_stds = stds[num_energy_obs:]
+            # Extract raw correlation values and single-qubit Z values
+            num_corr_obs = len(ZZ_correlations)
+            num_single_Z_obs = system_qubits
+            
+            raw_correlation_values = values[num_energy_obs:num_energy_obs + num_corr_obs]
+            raw_correlation_stds = stds[num_energy_obs:num_energy_obs + num_corr_obs]
+            
+            single_Z_values = values[num_energy_obs + num_corr_obs:num_energy_obs + num_corr_obs + num_single_Z_obs]
+            single_Z_stds = stds[num_energy_obs + num_corr_obs:num_energy_obs + num_corr_obs + num_single_Z_obs]
+            
+            # Calculate connected correlations: <Z_i Z_j> - <Z_i><Z_j>
+            correlation_values = []
+            correlation_stds = []
+            
+            for i, (raw_corr_val, raw_corr_std) in enumerate(zip(raw_correlation_values, raw_correlation_stds)):
+                # Get the indices (i, j) for this correlation from the stored indices
+                idx_i, idx_j = ZZ_indices[i]
+                
+                # Get single-qubit expectations
+                single_Z_i = single_Z_values[idx_i]
+                single_Z_j = single_Z_values[idx_j]
+                
+                # Calculate connected correlation
+                connected_corr = raw_corr_val - single_Z_i * single_Z_j
+                correlation_values.append(connected_corr)
+                
+                # Error propagation for connected correlation
+                # Var(connected) = Var(raw_corr) + Var(single_Z_i * single_Z_j)
+                # Var(single_Z_i * single_Z_j) = (single_Z_i)^2 * Var(single_Z_j) + (single_Z_j)^2 * Var(single_Z_i)
+                var_raw_corr = raw_corr_std**2
+                var_single_Z_i = single_Z_stds[idx_i]**2
+                var_single_Z_j = single_Z_stds[idx_j]**2
+                var_product = (single_Z_i**2) * var_single_Z_j + (single_Z_j**2) * var_single_Z_i
+                
+                connected_corr_std = np.sqrt(var_raw_corr + var_product)
+                correlation_stds.append(connected_corr_std)
         else:
             correlation_values = []
             correlation_stds = []
@@ -774,11 +824,11 @@ def create_example_parameter_sets():
 
 def analyze_correlations(correlation_values, correlation_stds, system_qubits, verbose=True):
     """
-    Analyze σᶻσᶻ correlation functions.
+    Analyze connected σᶻσᶻ correlation functions: <Z_i Z_j> - <Z_i><Z_j>.
     
     Args:
-        correlation_values: list of correlation values
-        correlation_stds: list of correlation standard deviations
+        correlation_values: list of connected correlation values
+        correlation_stds: list of connected correlation standard deviations
         system_qubits: number of system qubits
         verbose: if True, print analysis and create plots
     
@@ -806,25 +856,25 @@ def analyze_correlations(correlation_values, correlation_stds, system_qubits, ve
     
     if verbose:
         print("\n" + "="*50)
-        print("σᶻσᶻ Correlation Function Analysis")
+        print("Connected σᶻσᶻ Correlation Function Analysis")
         print("="*50)
         print(f"System qubits: {system_qubits}")
         print(f"Center qubit: {center}")
         print(f"Number of correlations: {len(correlation_values)}")
         print()
         
-        print("Distance | Correlation | Std Dev")
-        print("-" * 30)
+        print("Distance | Connected Correlation | Std Dev")
+        print("-" * 40)
         for i, (dist, val, std) in enumerate(zip(distances, correlation_values, correlation_stds)):
-            print(f"{dist:8d} | {val:10.6f} | {std:7.6f}")
+            print(f"{dist:8d} | {val:18.6f} | {std:7.6f}")
         
         # Create correlation plot
         plt.figure(figsize=(10, 6))
         plt.errorbar(distances, correlation_values, yerr=correlation_stds, 
                     marker='o', capsize=5, capthick=2, linewidth=2, markersize=8)
         plt.xlabel('Distance from center', fontsize=12)
-        plt.ylabel('σᶻσᶻ Correlation', fontsize=12)
-        plt.title(f'σᶻσᶻ Correlation Function\n({system_qubits} system qubits)', fontsize=14)
+        plt.ylabel('Connected σᶻσᶻ Correlation', fontsize=12)
+        plt.title(f'Connected σᶻσᶻ Correlation Function\n({system_qubits} system qubits)', fontsize=14)
         plt.grid(True, alpha=0.3)
         plt.axhline(y=0, color='black', linestyle=':', alpha=0.5)
         
@@ -832,7 +882,7 @@ def analyze_correlations(correlation_values, correlation_stds, system_qubits, ve
         plt.xticks(distances)
         plt.tight_layout()
         
-        print(f"\nCorrelation plot created for {system_qubits} qubits")
+        print(f"\nConnected correlation plot created for {system_qubits} qubits")
     
     return analysis
 
