@@ -65,7 +65,7 @@ def create_circuit_with_measurements(p, system_qubits, bath_qubits, parameters, 
     
     qc = QuantumCircuit(system_qubits + bath_qubits)
     
-    # Add measurements for initial state (before any sweeps)
+    # Add measurements for initial state (sweep_0)
     if observables and observable_labels:
         for i, (pauli_string, coefficient) in enumerate(observables):
             # Create SparsePauliOp for this observable
@@ -73,7 +73,7 @@ def create_circuit_with_measurements(p, system_qubits, bath_qubits, parameters, 
             qc.save_expectation_value(
                 observable_op, 
                 list(range(observable_op.num_qubits)), 
-                label=f"initial_{observable_labels[i]}", 
+                label=f"sweep_0_{observable_labels[i]}", 
                 pershot=True
             )
     
@@ -100,7 +100,7 @@ def create_circuit_with_measurements(p, system_qubits, bath_qubits, parameters, 
                 for j in range(bath_qubits):
                     qc.ryy(-g_t[i], j, j+system_qubits)
         
-        # Add measurements after this sweep (before reset)
+        # Add measurements after this sweep (before reset) - this becomes sweep_{sweep+1}
         if observables and observable_labels:
             for i, (pauli_string, coefficient) in enumerate(observables):
                 # Create SparsePauliOp for this observable
@@ -108,7 +108,7 @@ def create_circuit_with_measurements(p, system_qubits, bath_qubits, parameters, 
                 qc.save_expectation_value(
                     observable_op, 
                     list(range(observable_op.num_qubits)), 
-                    label=f"sweep_{sweep}_{observable_labels[i]}", 
+                    label=f"sweep_{sweep+1}_{observable_labels[i]}", 
                     pershot=True
                 )
         
@@ -143,11 +143,10 @@ def create_system_observables(system_qubits, bath_qubits):
         bath_qubits: number of bath qubits
     
     Returns:
-        tuple: (observables, observable_labels, observable_types)
+        tuple: (observables, observable_labels)
     """
     observables = []
     observable_labels = []
-    observable_types = []
     
     # Single-qubit X observables for all system qubits
     for i in range(system_qubits):
@@ -159,7 +158,6 @@ def create_system_observables(system_qubits, bath_qubits):
                 pauli_str += "I"
         observables.append((pauli_str, 1.0))
         observable_labels.append(f"X_{i}")
-        observable_types.append("single_X")
     
     # Single-qubit Z observables for all system qubits
     for i in range(system_qubits):
@@ -171,7 +169,6 @@ def create_system_observables(system_qubits, bath_qubits):
                 pauli_str += "I"
         observables.append((pauli_str, 1.0))
         observable_labels.append(f"Z_{i}")
-        observable_types.append("single_Z")
     
     # Two-qubit ZZ observables for all pairs of system qubits
     for i in range(system_qubits):
@@ -184,9 +181,8 @@ def create_system_observables(system_qubits, bath_qubits):
                     pauli_str += "I"
             observables.append((pauli_str, 1.0))
             observable_labels.append(f"ZZ_{i}_{j}")
-            observable_types.append("correlation")
     
-    return observables, observable_labels, observable_types
+    return observables, observable_labels
 
 
 def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_boundary: int,
@@ -230,7 +226,7 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
     alpha, beta, B_t, g_t = np.split(best_para, split_pts)
     
     # Create system observables
-    observables, observable_labels, observable_types = create_system_observables(system_qubits, bath_qubits)
+    observables, observable_labels = create_system_observables(system_qubits, bath_qubits)
     
     # Build circuit with measurements inserted at the right positions
     circuit_with_saves = create_circuit_with_measurements(
@@ -249,8 +245,8 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
         indices.remove(bath_idx)
     layout = indices + bath_indices
     
-    # Results storage
-    all_results = {}
+    # Results storage - collect raw data from each bond dimension
+    raw_results = {}
     
     # Run simulation for each bond dimension
     for bond_dim in bond_dimensions:
@@ -275,55 +271,72 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
         bond_dim_results = {
             'bond_dim': bond_dim,
             'shots': num_shots,
-            'initial_state_measurements': {},
-            'sweep_measurements': {}
+            'measurements': {}
         }
         
-        # Process initial state measurements
-        for i, (label, obs_type) in enumerate(zip(observable_labels, observable_types)):
-            initial_label = f"initial_{label}"
-            obs_data = result.data()[initial_label]
-            
-            if isinstance(obs_data, np.ndarray) and len(obs_data) > 1:
-                shot_values = obs_data
-                mean_val = np.mean(shot_values)
-                variance = np.var(shot_values, ddof=1)
-                std_val = np.sqrt(variance / num_shots)
-            else:
-                mean_val = float(obs_data)
-                std_val = 0.0
-            
-            bond_dim_results['initial_state_measurements'][label] = {
-                'value': mean_val,
-                'std': std_val,
-                'type': obs_type
-            }
-        
-        # Process sweep measurements
-        for sweep in range(num_sweeps):
+        # Process all measurements (sweep_0 through sweep_{num_sweeps})
+        for sweep in range(num_sweeps + 1):  # 0 for initial state, 1 to num_sweeps for after each sweep
             sweep_key = f"sweep_{sweep}"
-            bond_dim_results['sweep_measurements'][sweep_key] = {}
+            bond_dim_results['measurements'][sweep_key] = {}
             
-            for i, (label, obs_type) in enumerate(zip(observable_labels, observable_types)):
+            for i, label in enumerate(observable_labels):
                 sweep_label = f"sweep_{sweep}_{label}"
                 obs_data = result.data()[sweep_label]
                 
                 if isinstance(obs_data, np.ndarray) and len(obs_data) > 1:
                     shot_values = obs_data
-                    mean_val = np.mean(shot_values)
+                    mean_val = float(np.mean(shot_values))
                     variance = np.var(shot_values, ddof=1)
-                    std_val = np.sqrt(variance / num_shots)
+                    std_error = float(np.sqrt(variance / num_shots))
                 else:
                     mean_val = float(obs_data)
-                    std_val = 0.0
+                    std_error = 0.0
                 
-                bond_dim_results['sweep_measurements'][sweep_key][label] = {
+                bond_dim_results['measurements'][sweep_key][label] = {
                     'value': mean_val,
-                    'std': std_val,
-                    'type': obs_type
+                    'std_error': std_error
                 }
         
-        all_results[f"bond_dim_{bond_dim}"] = bond_dim_results
+        raw_results[f"bond_dim_{bond_dim}"] = bond_dim_results
+    
+    # Now compute the final results using the highest bond dimension as reference
+    print("Computing final results from multiple bond dimensions...")
+    
+    # Get bond dimensions sorted
+    sorted_bond_dims = sorted(bond_dimensions)
+    bd_low = sorted_bond_dims[0]
+    bd_high = sorted_bond_dims[-1]
+    
+    # Create final results structure
+    final_results = {
+        'shots': num_shots,
+        'bond_dimensions_used': bond_dimensions,
+        'reference_bond_dim': bd_high,
+        'measurements': {}
+    }
+    
+    # Process all measurements (sweep_0 through sweep_{num_sweeps}) with error metrics
+    for sweep in range(num_sweeps + 1):  # 0 for initial state, 1 to num_sweeps for after each sweep
+        sweep_key = f"sweep_{sweep}"
+        final_results['measurements'][sweep_key] = {}
+        
+        for label in observable_labels:
+            # Get values from both bond dimensions
+            low_bd_data = raw_results[f"bond_dim_{bd_low}"]['measurements'][sweep_key][label]
+            high_bd_data = raw_results[f"bond_dim_{bd_high}"]['measurements'][sweep_key][label]
+            
+            # Compute error metrics
+            mean_val = high_bd_data['value']  # Use high bond dimension value
+            truncation_error = float(abs(high_bd_data['value'] - low_bd_data['value']))
+            std_error = high_bd_data['std_error']  # Already divided by sqrt(num_shots)
+            total_error = float(np.sqrt(truncation_error**2 + std_error**2))
+            
+            final_results['measurements'][sweep_key][label] = {
+                'mean': mean_val,
+                'truncation_error': truncation_error,
+                'std_error': std_error,
+                'total_error': total_error
+            }
     
     # Create comprehensive data structure
     collected_data = {
@@ -343,14 +356,21 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
             'num_shots': num_shots,
             'collection_timestamp': time.time(),
             'observable_labels': observable_labels,
-            'observable_types': observable_types
+            'error_computation': {
+                'description': 'Error metrics computed from multiple bond dimensions',
+                'mean': 'Value from highest bond dimension',
+                'truncation_error': 'Absolute difference between low and high bond dimension values',
+                'std_error': 'Standard error from high bond dimension (std_error/sqrt(num_shots))',
+                'total_error': 'Root mean square of truncation_error and std_error'
+            }
         },
-        'results': all_results
+        'final_results': final_results,
+        'raw_data': raw_results  # Keep raw data for debugging/analysis if needed
     }
     
     # Save data to JSON file
     timestamp = int(time.time())
-    filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}_{timestamp}.json"
+    filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}.json"
     filepath = os.path.join(output_dir, filename)
     
     with open(filepath, 'w') as f:
@@ -395,7 +415,7 @@ def compute_ground_state_observables(system_qubits: int, J: float, h: float,
         
         # Calculate expectation values
         ground_state_results = {
-            'ground_state_energy': E0,
+            'ground_state_energy': float(E0),
             'bond_dim_used': bond_dim,
             'observables': {}
         }
@@ -404,9 +424,8 @@ def compute_ground_state_observables(system_qubits: int, J: float, h: float,
         for i, (qubit_i, qubit_j) in enumerate(correlation_results['ZZ_pairs']):
             label = f"ZZ_{qubit_i}_{qubit_j}"
             ground_state_results['observables'][label] = {
-                'value': correlation_results['ZZ_correlations'][i],
-                'std': 0.0,  # DMRG gives exact values, no statistical uncertainty
-                'type': 'correlation'
+                'value': float(correlation_results['ZZ_correlations'][i]),
+                'std_error': 0.0  # DMRG gives exact values, no statistical uncertainty
             }
         
         # Create comprehensive ground state data
@@ -427,7 +446,7 @@ def compute_ground_state_observables(system_qubits: int, J: float, h: float,
         
         # Save ground state data to JSON file
         timestamp = int(time.time())
-        filename = f"ground_state_data_sys{system_qubits}_J{J}_h{h}_{timestamp}.json"
+        filename = f"ground_state_data_sys{system_qubits}_J{J}_h{h}.json"
         filepath = os.path.join(output_dir, filename)
         
         with open(filepath, 'w') as f:
@@ -459,8 +478,8 @@ if __name__ == "__main__":
     
     # Example parameters
     params = {
-        'system_qubits': 10,
-        'bath_qubits': 5,
+        'system_qubits': 28,
+        'bath_qubits': 14,
         'open_boundary': 1,
         'J': 0.6,
         'h': 0.4,
@@ -470,7 +489,7 @@ if __name__ == "__main__":
         'two_qubit_gate_noise': 0.00,
         'training_method': 'energy',
         'initial_state': 'zeros',
-        'bond_dimensions': [32, 64],
+        'bond_dimensions': [32,64],
         'num_shots': 100
     }
     
