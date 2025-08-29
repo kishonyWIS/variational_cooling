@@ -472,35 +472,60 @@ def compute_ground_state_observables(system_qubits: int, J: float, h: float,
 
 
 if __name__ == "__main__":
-    # Example usage
-    print("Data Collection Module for Variational Cooling")
-    print("=" * 50)
+    import argparse
     
-    # Example parameters
+    parser = argparse.ArgumentParser(description='Data Collection Module for Variational Cooling')
+    parser.add_argument('--system-qubits', type=int, required=True, help='Number of system qubits')
+    parser.add_argument('--bath-qubits', type=int, required=True, help='Number of bath qubits')
+    parser.add_argument('--open-boundary', type=int, default=1, help='Boundary conditions (1=open, 0=periodic)')
+    parser.add_argument('--J', type=float, required=True, help='Ising coupling strength')
+    parser.add_argument('--h', type=float, required=True, help='Transverse field strength')
+    parser.add_argument('--p', type=int, default=3, help='Number of HVA layers per sweep')
+    parser.add_argument('--num-sweeps', type=int, default=12, help='Number of cooling sweeps')
+    parser.add_argument('--single-qubit-noise', type=float, default=0.0, help='Single qubit gate noise')
+    parser.add_argument('--two-qubit-noise', type=float, default=0.0, help='Two qubit gate noise')
+    parser.add_argument('--training-method', default='energy', help='Training method')
+    parser.add_argument('--initial-state', default='zeros', help='Initial state description')
+    parser.add_argument('--bond-dimensions', type=str, default='32,64', help='Comma-separated bond dimensions')
+    parser.add_argument('--num-shots', type=int, default=100, help='Number of shots for measurements')
+    parser.add_argument('--output-dir', default='results', help='Output directory for results')
+    
+    args = parser.parse_args()
+    
+    # Parse bond dimensions
+    bond_dimensions = [int(x.strip()) for x in args.bond_dimensions.split(',')]
+    
+    # Create parameters dictionary
     params = {
-        'system_qubits': 28,
-        'bath_qubits': 14,
-        'open_boundary': 1,
-        'J': 0.6,
-        'h': 0.4,
-        'p': 3,
-        'num_sweeps': 12,
-        'single_qubit_gate_noise': 0.000,
-        'two_qubit_gate_noise': 0.00,
-        'training_method': 'energy',
-        'initial_state': 'zeros',
-        'bond_dimensions': [32,64],
-        'num_shots': 100
+        'system_qubits': args.system_qubits,
+        'bath_qubits': args.bath_qubits,
+        'open_boundary': args.open_boundary,
+        'J': args.J,
+        'h': args.h,
+        'p': args.p,
+        'num_sweeps': args.num_sweeps,
+        'single_qubit_gate_noise': args.single_qubit_noise,
+        'two_qubit_gate_noise': args.two_qubit_noise,
+        'training_method': args.training_method,
+        'initial_state': args.initial_state,
+        'bond_dimensions': bond_dimensions,
+        'num_shots': args.num_shots
     }
     
+    print("Data Collection Module for Variational Cooling")
+    print("=" * 50)
+    print(f"Parameters: {params}")
+    print()
+    
     print("Collecting variational cooling data...")
-    collected_data = collect_variational_cooling_data(**params)
+    collected_data = collect_variational_cooling_data(**params, output_dir=args.output_dir)
     
     print("\nComputing ground state observables...")
     ground_state_data = compute_ground_state_observables(
         system_qubits=params['system_qubits'],
         J=params['J'],
-        h=params['h']
+        h=params['h'],
+        output_dir=args.output_dir
     )
     
     print("\nData collection completed!")
