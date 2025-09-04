@@ -9,6 +9,39 @@ import os
 import sys
 import numpy as np
 
+# =============================================================================
+# CONFIGURATION - All parameters defined here
+# =============================================================================
+
+# System sizes: [(4,2), (8,4), (12,6), (16,8), (20,10), (24,12), (28, 14)]
+SYSTEM_SIZES = [(4, 2), (8, 4), (12, 6)]#, (16, 8), (20, 10), (24, 12), (28, 14)]
+
+# J, h combinations: [(0.4,0.6), (0.45,0.55), (0.55, 0.45), (0.6, 0.4)]
+J_H_LIST = [(0.4, 0.6), (0.45, 0.55), (0.55, 0.45), (0.6, 0.4)]
+
+# Noise levels: (0.001, 0.01) * np.linspace(0, 1, 11)
+NOISE_FACTORS = np.linspace(0, 1, 11)
+BASE_SINGLE_QUBIT_NOISE = 0.001
+BASE_TWO_QUBIT_NOISE = 0.01
+
+# Fixed parameters
+P = 3
+NUM_SWEEPS = 12
+TRAINING_METHOD = 'energy'
+INITIAL_STATE = 'zeros'
+BOND_DIMENSIONS = [32, 64]
+BASE_SHOTS = 1000  # Base shots for BASE_TOTAL_SYSTEM_SIZE (28+14)
+BASE_TOTAL_SYSTEM_SIZE = 28 + 14
+OPEN_BOUNDARY = 1
+
+# Job configuration
+OUTPUT_DIR = "jobs"
+JOB_NAME = "data_collection"
+WALL_TIME = "24:00"  # Match cluster setting
+MEMORY = "4GB"       # Increased for larger system sizes
+CORES = 1
+QUEUE = "berg"       # Change to berg queue for this cluster
+
 
 def create_parameter_sets():
     """
@@ -16,43 +49,30 @@ def create_parameter_sets():
     """
     parameter_sets = []
     
-    # System sizes: [(4,2), (8,4), (12,6), (16,8), (20,10), (24,12), (28, 14)]
-    system_sizes = [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)]
-    
-    # J, h: [(0.4,0.6), (0.45,0.55), (0.55, 0.45), (0.6, 0.4)]
-    J_h_list = [(0.4, 0.6), (0.45, 0.55), (0.55, 0.45), (0.6, 0.4)]
-    
-    # Noise levels: (0.001, 0.01) * np.linspace(0, 1, 11)
-    noise_factors = np.linspace(0, 1, 11)
-    base_single_qubit_noise = 0.001
-    base_two_qubit_noise = 0.01
-    
-    # Fixed parameters
-    p = 3
-    num_sweeps = 12
-    training_method = 'energy'
-    initial_state = 'zeros'
-    bond_dimensions = [32, 64]
-    num_shots = 100
-    open_boundary = 1
-    
     # Generate all combinations
-    for J, h in J_h_list:
-        for noise_factor in noise_factors:
-            for system_qubits, bath_qubits in system_sizes:
+    for J, h in J_H_LIST:
+        for noise_factor in NOISE_FACTORS:
+            for system_qubits, bath_qubits in SYSTEM_SIZES:
+                # Calculate shots based on system size
+                current_total = system_qubits + bath_qubits
+                
+                # Calculate scaling factor (larger systems get fewer shots)
+                scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
+                num_shots = int(BASE_SHOTS * scaling_factor)
+                
                 parameter_sets.append({
                     'system_qubits': system_qubits,
                     'bath_qubits': bath_qubits,
-                    'open_boundary': open_boundary,
+                    'open_boundary': OPEN_BOUNDARY,
                     'J': J,
                     'h': h,
-                    'p': p,
-                    'num_sweeps': num_sweeps,
-                    'single_qubit_gate_noise': base_single_qubit_noise * noise_factor,
-                    'two_qubit_gate_noise': base_two_qubit_noise * noise_factor,
-                    'training_method': training_method,
-                    'initial_state': initial_state,
-                    'bond_dimensions': bond_dimensions,
+                    'p': P,
+                    'num_sweeps': NUM_SWEEPS,
+                    'single_qubit_gate_noise': BASE_SINGLE_QUBIT_NOISE * noise_factor,
+                    'two_qubit_gate_noise': BASE_TWO_QUBIT_NOISE * noise_factor,
+                    'training_method': TRAINING_METHOD,
+                    'initial_state': INITIAL_STATE,
+                    'bond_dimensions': BOND_DIMENSIONS,
                     'num_shots': num_shots
                 })
     
@@ -60,8 +80,8 @@ def create_parameter_sets():
 
 
 def create_job_script(job_id, params, output_dir="jobs", 
-                     job_name="data_collection", wall_time="48:00", 
-                     memory="16GB", cores=1, queue="normal"):
+                     job_name="data_collection", wall_time="24:00", 
+                     memory="4GB", cores=1, queue="berg"):
     """
     Create a job script for a single parameter set.
     
@@ -93,6 +113,7 @@ def create_job_script(job_id, params, output_dir="jobs",
 #BSUB -J {job_name}_{job_id:03d}
 #BSUB -q {queue}
 #BSUB -W {wall_time}
+#BSUB -R "rusage[mem=4096]"
 #BSUB -M {memory}
 #BSUB -n {cores}
 #BSUB -o {output_dir}/job_{job_id:03d}.out
@@ -132,8 +153,8 @@ echo "Job {job_id} completed at $(date)"
 
 
 def generate_jobs(parameter_sets, output_dir="jobs", 
-                 job_name="data_collection", wall_time="48:00", 
-                 memory="16GB", cores=1, queue="normal"):
+                 job_name="data_collection", wall_time="24:00", 
+                 memory="4GB", cores=1, queue="berg"):
     """
     Generate job files, one for each parameter set.
     
@@ -166,6 +187,7 @@ def generate_jobs(parameter_sets, output_dir="jobs",
         print(f"  System: {params['system_qubits']}+{params['bath_qubits']} qubits")
         print(f"  J={params['J']}, h={params['h']}")
         print(f"  Noise: ({params['single_qubit_gate_noise']:.6f}, {params['two_qubit_gate_noise']:.6f})")
+        print(f"  Shots: {params['num_shots']}")
         print()
     
     return job_scripts
@@ -236,23 +258,20 @@ def create_monitor_script(job_scripts, output_dir="jobs"):
 
 
 if __name__ == "__main__":
-    # Configuration
-    OUTPUT_DIR = "jobs"
-    JOB_NAME = "data_collection"
-    WALL_TIME = "48:00"  # Increased wall time for data collection
-    MEMORY = "16GB"      # Increased memory for data collection
-    CORES = 1
-    QUEUE = "normal"     # Change to your cluster's queue name
-    
     print("Generating cluster jobs for data_collection.py parameter sweep...")
     print(f"Output directory: {OUTPUT_DIR}")
     print("Each parameter set will run in a separate job")
     
-    # Clean up existing job files
+    # Check if jobs directory exists and warn user
     if os.path.exists(OUTPUT_DIR):
-        import shutil
-        shutil.rmtree(OUTPUT_DIR)
-        print(f"Cleaned up existing directory: {OUTPUT_DIR}")
+        print(f"Warning: Jobs directory '{OUTPUT_DIR}' already exists.")
+        print("This will overwrite existing job files. Press Ctrl+C to cancel or Enter to continue...")
+        try:
+            input()
+        except KeyboardInterrupt:
+            print("Operation cancelled.")
+            exit(0)
+        print("Continuing with job generation...")
     
     print()
     
@@ -266,24 +285,30 @@ if __name__ == "__main__":
     print("=" * 50)
     
     # Summary by J,h values
-    J_h_list = [(0.4, 0.6), (0.45, 0.55), (0.55, 0.45), (0.6, 0.4)]
-    for J, h in J_h_list:
+    for J, h in J_H_LIST:
         count = sum(1 for params in all_parameter_sets if params['J'] == J and params['h'] == h)
         print(f"J={J}, h={h}: {count} combinations")
     
     # Summary by system size
-    system_sizes = [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)]
-    for sys_qubits, bath_qubits in system_sizes:
+    for sys_qubits, bath_qubits in SYSTEM_SIZES:
         count = sum(1 for params in all_parameter_sets 
                    if params['system_qubits'] == sys_qubits and params['bath_qubits'] == bath_qubits)
         print(f"{sys_qubits}+{bath_qubits} qubits: {count} combinations")
     
     # Summary by noise levels
-    noise_levels = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    for noise_factor in noise_levels:
+    for noise_factor in NOISE_FACTORS:
         count = sum(1 for params in all_parameter_sets 
-                   if abs(params['single_qubit_gate_noise'] - 0.001 * noise_factor) < 1e-6)
+                   if abs(params['single_qubit_gate_noise'] - BASE_SINGLE_QUBIT_NOISE * noise_factor) < 1e-6)
         print(f"Noise factor {noise_factor:.1f}: {count} combinations")
+    
+    # Summary of shot allocation
+    print("\nShot allocation by system size:")
+    print("-" * 30)
+    for sys_qubits, bath_qubits in SYSTEM_SIZES:
+        current_total = sys_qubits + bath_qubits
+        scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
+        shots = int(BASE_SHOTS * scaling_factor)
+        print(f"{sys_qubits}+{bath_qubits} qubits: {shots} shots (scaling factor: {scaling_factor:.2f})")
     
     print("=" * 50)
     
