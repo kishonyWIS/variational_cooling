@@ -44,7 +44,7 @@ def load_ground_state_data(filepath: str) -> Dict[str, Any]:
 
 
 def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float, 
-                           system_qubits: int) -> Tuple[float, float, float]:
+                           system_qubits: int) -> Tuple[float, float]:
     """
     Calculate energy density from measurements.
     
@@ -55,14 +55,13 @@ def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float,
         system_qubits: number of system qubits
         
     Returns:
-        tuple: (energy_density, truncation_error, std_error)
+        tuple: (energy_density, total_error)
     """
     # Calculate energy from ZZ correlations and X expectations
     # Note: The circuit uses RZZ(-J*alpha) and RX(-h*beta), which corresponds to
     # Hamiltonian H = -J * Σ Z_i Z_{i+1} - h * Σ X_i
     energy = 0.0
-    truncation_error_squared = 0.0  # Accumulate squared errors for RSS
-    std_error_squared = 0.0         # Accumulate squared errors for RSS
+    total_error_squared = 0.0  # Accumulate squared errors for RSS
     
     # ZZ terms (nearest neighbor interactions) - note the negative sign
     for i in range(system_qubits - 1):
@@ -70,9 +69,8 @@ def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float,
         if label in measurements:
             obs_data = measurements[label]
             energy += -J * obs_data['mean']  # Negative sign to match circuit
-            # Square the weighted error for RSS combination
-            truncation_error_squared += (J * obs_data['truncation_error']) ** 2
-            std_error_squared += (J * obs_data['std_error']) ** 2
+            # Use total_error for RSS combination
+            total_error_squared += (J * obs_data['total_error']) ** 2
                 
     # Transverse field terms - note the negative sign
     for i in range(system_qubits):
@@ -80,18 +78,16 @@ def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float,
         if label in measurements:
             obs_data = measurements[label]
             energy += -h * obs_data['mean']  # Negative sign to match circuit
-            # Square the weighted error for RSS combination
-            truncation_error_squared += (h * obs_data['truncation_error']) ** 2
-            std_error_squared += (h * obs_data['std_error']) ** 2
+            # Use total_error for RSS combination
+            total_error_squared += (h * obs_data['total_error']) ** 2
     
     # Convert to energy density
     energy_density = energy / system_qubits
     
     # Take square root for final error (RSS method)
-    truncation_error = np.sqrt(truncation_error_squared) / system_qubits
-    std_error = np.sqrt(std_error_squared) / system_qubits
+    total_error = np.sqrt(total_error_squared) / system_qubits
     
-    return energy_density, truncation_error, std_error
+    return energy_density, total_error
 
 
 def plot_energy_density_vs_sweeps(variational_data: Dict[str, Any], 
@@ -127,21 +123,19 @@ def plot_energy_density_vs_sweeps(variational_data: Dict[str, Any],
     # Prepare data for plotting
     sweep_numbers = []
     energy_densities = []
-    truncation_errors = []
-    std_errors = []
+    total_errors = []
     
     # Process each sweep
     for sweep in range(num_sweeps + 1):  # 0 to num_sweeps
         sweep_key = f"sweep_{sweep}"
         if sweep_key in measurements:
-            energy_density, trunc_err, std_err = calculate_energy_density(
+            energy_density, total_err = calculate_energy_density(
                 measurements[sweep_key], J, h, system_qubits
             )
             
             sweep_numbers.append(sweep)
             energy_densities.append(energy_density)
-            truncation_errors.append(trunc_err)
-            std_errors.append(std_err)
+            total_errors.append(total_err)
     
     # Calculate energy density above ground state
     energy_densities_above_gs = [ed - ground_state_energy_density for ed in energy_densities]
@@ -154,17 +148,11 @@ def plot_energy_density_vs_sweeps(variational_data: Dict[str, Any],
     plt.plot(sweep_numbers, energy_densities_above_gs, 'o-', 
              label='Energy density above ground state', color='black', markersize=6)
     
-    # Add truncation error bars in red
+    # Add total error bars
     plt.errorbar(sweep_numbers, energy_densities_above_gs, 
-                yerr=truncation_errors, fmt='none', 
-                capsize=5, capthick=2, ecolor='red', 
-                elinewidth=2, label='Truncation error', alpha=0.8)
-    
-    # Add standard error bars in blue
-    plt.errorbar(sweep_numbers, energy_densities_above_gs, 
-                yerr=std_errors, fmt='none', 
-                capsize=3, capthick=1, ecolor='blue', 
-                elinewidth=1.5, label='Standard error', alpha=0.8)
+                yerr=total_errors, fmt='none', 
+                capsize=5, capthick=2, ecolor='black', 
+                elinewidth=2, alpha=0.8)
     
     # Add horizontal line at zero (ground state)
     plt.axhline(y=0, color='black', linestyle='--', alpha=0.7, label='Ground state')
@@ -240,10 +228,8 @@ def plot_spin_spin_correlations_vs_distance(variational_data: Dict[str, Any],
     final_connected = []
     
     # Error bars
-    final_raw_trunc_errors = []
-    final_raw_std_errors = []
-    final_connected_trunc_errors = []
-    final_connected_std_errors = []
+    final_raw_total_errors = []
+    final_connected_total_errors = []
     
     for i, j in site_pairs:
         distance = j - i
@@ -264,12 +250,10 @@ def plot_spin_spin_correlations_vs_distance(variational_data: Dict[str, Any],
         if vc_label in final_measurements:
             vc_data = final_measurements[vc_label]
             final_raw.append(vc_data['mean'])
-            final_raw_trunc_errors.append(vc_data['truncation_error'])
-            final_raw_std_errors.append(vc_data['std_error'])
+            final_raw_total_errors.append(vc_data['total_error'])
         else:
             final_raw.append(0.0)
-            final_raw_trunc_errors.append(0.0)
-            final_raw_std_errors.append(0.0)
+            final_raw_total_errors.append(0.0)
         
         # Final sweep connected correlations
         # Get individual Z expectations
@@ -291,29 +275,20 @@ def plot_spin_spin_correlations_vs_distance(variational_data: Dict[str, Any],
         # For error bars on connected correlation, we need to propagate errors
         # This is a simplified error propagation
         if z_i_label in final_measurements and z_j_label in final_measurements:
-            z_i_trunc_err = final_measurements[z_i_label]['truncation_error']
-            z_j_trunc_err = final_measurements[z_j_label]['truncation_error']
-            z_i_std_err = final_measurements[z_i_label]['std_error']
-            z_j_std_err = final_measurements[z_j_label]['std_error']
+            z_i_total_err = final_measurements[z_i_label]['total_error']
+            z_j_total_err = final_measurements[z_j_label]['total_error']
             
             # Error propagation for connected correlation
             # ∂(ZZ - Z_i * Z_j)/∂Z_i = -Z_j, ∂(ZZ - Z_i * Z_j)/∂Z_j = -Z_i
-            trunc_err = np.sqrt(
-                final_raw_trunc_errors[-1]**2 + 
-                (z_j_expect * z_i_trunc_err)**2 + 
-                (z_i_expect * z_j_trunc_err)**2
-            )
-            std_err = np.sqrt(
-                final_raw_std_errors[-1]**2 + 
-                (z_j_expect * z_i_std_err)**2 + 
-                (z_i_expect * z_j_std_err)**2
+            total_err = np.sqrt(
+                final_raw_total_errors[-1]**2 + 
+                (z_j_expect * z_i_total_err)**2 + 
+                (z_i_expect * z_j_total_err)**2
             )
         else:
-            trunc_err = final_raw_trunc_errors[-1]
-            std_err = final_raw_std_errors[-1]
+            total_err = final_raw_total_errors[-1]
         
-        final_connected_trunc_errors.append(trunc_err)
-        final_connected_std_errors.append(std_err)
+        final_connected_total_errors.append(total_err)
     
     # Create the plot
     plt.figure(figsize=(10, 6))
@@ -324,40 +299,24 @@ def plot_spin_spin_correlations_vs_distance(variational_data: Dict[str, Any],
              color='green', markersize=8, linewidth=2)
     
     # Plot final sweep raw correlations with error bars
-    
-    # Add truncation error bars in red
-    plt.errorbar(distances, final_raw, 
-                yerr=final_raw_trunc_errors, fmt='none', 
-                capsize=5, capthick=2, ecolor='red', 
-                elinewidth=2, label='Truncation error', alpha=0.8)
-    
-    # Add standard error bars in blue
-    plt.errorbar(distances, final_raw, 
-                yerr=final_raw_std_errors, fmt='none', 
-                capsize=3, capthick=1, ecolor='blue', 
-                elinewidth=1.5, label='Standard error', alpha=0.8)
-
     plt.plot(distances, final_raw, 'o-', 
              label='Steady state: $\left\langle\sigma^Z_i \sigma^Z_j\\right\\rangle$', 
              color='black', markersize=6)
     
-    # Plot final sweep connected correlations with error bars
-    
-    # Add truncation error bars in red
-    plt.errorbar(distances, final_connected, 
-                yerr=final_connected_trunc_errors, fmt='none', 
-                capsize=5, capthick=2, ecolor='red', 
+    plt.errorbar(distances, final_raw, 
+                yerr=final_raw_total_errors, fmt='none', 
+                capsize=5, capthick=2, ecolor='black', 
                 elinewidth=2, alpha=0.8)
     
-    # Add standard error bars in blue
-    plt.errorbar(distances, final_connected, 
-                yerr=final_connected_std_errors, fmt='none', 
-                capsize=3, capthick=1, ecolor='blue', 
-                elinewidth=1.5, alpha=0.8)
-
+    # Plot final sweep connected correlations with error bars
     plt.plot(distances, final_connected, '^-', 
              label='Steady state: $\left\langle\sigma^Z_i \sigma^Z_j\\right\\rangle - \left\langle\sigma^Z_i\\right\\rangle \left\langle\sigma^Z_j\\right\\rangle$', 
              color='purple', markersize=6)
+    
+    plt.errorbar(distances, final_connected, 
+                yerr=final_connected_total_errors, fmt='none', 
+                capsize=5, capthick=2, ecolor='purple', 
+                elinewidth=2, alpha=0.8)
 
     # set x-ticks to integers
     plt.xticks(distances)
@@ -423,8 +382,7 @@ def plot_energy_density_vs_noise_for_different_system_sizes(results_dir: str = "
             print(f"  Processing system size: {system_qubits}+{bath_qubits} qubits")
             noise_levels = []
             energy_densities = []
-            truncation_errors = []
-            std_errors = []
+            total_errors = []
             
             # Collect data for each noise level
             for noise_factor in noise_factors:
@@ -446,7 +404,7 @@ def plot_energy_density_vs_noise_for_different_system_sizes(results_dir: str = "
                         measurements = data['final_results']['measurements'][final_sweep_key]
                         
                         # Calculate energy density
-                        energy_density, trunc_err, std_err = calculate_energy_density(
+                        energy_density, total_err = calculate_energy_density(
                             measurements, J, h, system_qubits
                         )
                         
@@ -465,8 +423,7 @@ def plot_energy_density_vs_noise_for_different_system_sizes(results_dir: str = "
                                 
                                 noise_levels.append(noise_factor)
                                 energy_densities.append(energy_density_above_gs)
-                                truncation_errors.append(trunc_err)
-                                std_errors.append(std_err)
+                                total_errors.append(total_err)
                             except (json.JSONDecodeError, KeyError) as e:
                                 print(f"Warning: Could not process ground state file {gs_filename}: {e}")
                                 continue
@@ -485,8 +442,7 @@ def plot_energy_density_vs_noise_for_different_system_sizes(results_dir: str = "
                 sorted_indices = np.argsort(noise_levels)
                 noise_levels = [noise_levels[i] for i in sorted_indices]
                 energy_densities = [energy_densities[i] for i in sorted_indices]
-                truncation_errors = [truncation_errors[i] for i in sorted_indices]
-                std_errors = [std_errors[i] for i in sorted_indices]
+                total_errors = [total_errors[i] for i in sorted_indices]
                 
                 # Plot with error bars
                 color = plt.cm.viridis(sys_idx / (len(system_sizes) - 1))
@@ -495,17 +451,11 @@ def plot_energy_density_vs_noise_for_different_system_sizes(results_dir: str = "
                 line, = ax.plot(noise_levels, energy_densities, 'o-', 
                                color=color, markersize=6, linewidth=2)
                 
-                # Add truncation error bars in red
+                # Add total error bars
                 ax.errorbar(noise_levels, energy_densities, 
-                           yerr=truncation_errors, fmt='none', 
-                           capsize=5, capthick=2, ecolor='red', 
+                           yerr=total_errors, fmt='none', 
+                           capsize=5, capthick=2, ecolor=color, 
                            elinewidth=2, alpha=0.8)
-                
-                # Add standard error bars in blue
-                ax.errorbar(noise_levels, energy_densities, 
-                           yerr=std_errors, fmt='none', 
-                           capsize=3, capthick=1, ecolor='blue', 
-                           elinewidth=1.5, alpha=0.8)
                 
                 # Collect legend handle and label for the first panel only
                 if panel_idx == 0:
@@ -635,6 +585,7 @@ def plot_correlation_length_vs_noise_largest_system(results_dir: str = "results"
             # Calculate connected correlations
             connected_correlations = []
             valid_distances = []
+            connected_total_errors = []
             
             for i, j in site_pairs:
                 # Get ZZ correlation
@@ -644,6 +595,7 @@ def plot_correlation_length_vs_noise_largest_system(results_dir: str = "results"
                 
                 zz_data = measurements[zz_label]
                 zz_corr = zz_data['mean']
+                zz_total_err = zz_data['total_error']
                 
                 # Get individual Z expectations
                 z_i_label = f"Z_{i}"
@@ -651,16 +603,29 @@ def plot_correlation_length_vs_noise_largest_system(results_dir: str = "results"
                 
                 z_i_expect = 0.0
                 z_j_expect = 0.0
+                z_i_total_err = 0.0
+                z_j_total_err = 0.0
                 
                 if z_i_label in measurements:
                     z_i_expect = measurements[z_i_label]['mean']
+                    z_i_total_err = measurements[z_i_label]['total_error']
                 if z_j_label in measurements:
                     z_j_expect = measurements[z_j_label]['mean']
+                    z_j_total_err = measurements[z_j_label]['total_error']
                 
                 # Calculate connected correlation
                 connected_corr = zz_corr - z_i_expect * z_j_expect
                 connected_correlations.append(connected_corr)
                 valid_distances.append(j - i)
+                
+                # Error propagation for connected correlation
+                # ∂(ZZ - Z_i * Z_j)/∂Z_i = -Z_j, ∂(ZZ - Z_i * Z_j)/∂Z_j = -Z_i
+                total_err = np.sqrt(
+                    zz_total_err**2 + 
+                    (z_j_expect * z_i_total_err)**2 + 
+                    (z_i_expect * z_j_total_err)**2
+                )
+                connected_total_errors.append(total_err)
             
             if len(connected_correlations) < 3:
                 print(f"Warning: Insufficient data points for noise factor {noise_factor}")
@@ -668,10 +633,11 @@ def plot_correlation_length_vs_noise_largest_system(results_dir: str = "results"
             
             # Fit linear decay in log space
             try:
-                # Filter out negative correlations and corresponding distances
+                # Filter out negative correlations and corresponding distances and errors
                 positive_mask = np.array(connected_correlations) > 0
                 positive_correlations = np.array(connected_correlations)[positive_mask]
                 positive_distances = np.array(valid_distances)[positive_mask]
+                positive_total_errors = np.array(connected_total_errors)[positive_mask]
                 
                 if len(positive_correlations) < 3:
                     print(f"  Noise {noise_factor:.1f}: Insufficient positive correlations for fitting")
@@ -1062,8 +1028,7 @@ def plot_magnetization_vs_position_different_jh_zero_noise(results_dir: str = "r
             # Extract magnetization data
             positions = []
             magnetizations = []
-            truncation_errors = []
-            std_errors = []
+            total_errors = []
             
             for i in range(largest_available_system):
                 z_label = f"Z_{i}"
@@ -1071,8 +1036,7 @@ def plot_magnetization_vs_position_different_jh_zero_noise(results_dir: str = "r
                     z_data = vc_measurements[z_label]
                     positions.append(i)
                     magnetizations.append(z_data['mean'])
-                    truncation_errors.append(z_data['truncation_error'])
-                    std_errors.append(z_data['std_error'])
+                    total_errors.append(z_data['total_error'])
             
             if len(magnetizations) > 0:
                 # Plot magnetization with error bars
@@ -1082,7 +1046,7 @@ def plot_magnetization_vs_position_different_jh_zero_noise(results_dir: str = "r
                 
                 # Add error bars
                 ax.errorbar(positions, magnetizations, 
-                           yerr=truncation_errors, fmt='none', 
+                           yerr=total_errors, fmt='none', 
                            capsize=3, capthick=1, ecolor=color, 
                            elinewidth=1, alpha=0.6)
                 
@@ -1209,8 +1173,7 @@ def plot_magnetization_vs_position_different_noise_fixed_jh(results_dir: str = "
             # Extract magnetization data
             positions = []
             magnetizations = []
-            truncation_errors = []
-            std_errors = []
+            total_errors = []
             
             for i in range(largest_available_system):
                 z_label = f"Z_{i}"
@@ -1218,8 +1181,7 @@ def plot_magnetization_vs_position_different_noise_fixed_jh(results_dir: str = "
                     z_data = vc_measurements[z_label]
                     positions.append(i)
                     magnetizations.append(z_data['mean'])
-                    truncation_errors.append(z_data['truncation_error'])
-                    std_errors.append(z_data['std_error'])
+                    total_errors.append(z_data['total_error'])
             
             if len(magnetizations) > 0:
                 color = colors[noise_idx]
@@ -1231,7 +1193,7 @@ def plot_magnetization_vs_position_different_noise_fixed_jh(results_dir: str = "
                 
                 # Add error bars
                 ax.errorbar(positions, magnetizations, 
-                           yerr=truncation_errors, fmt='none', 
+                           yerr=total_errors, fmt='none', 
                            capsize=2, capthick=1, ecolor=color, 
                            elinewidth=1, alpha=0.6)
                 
@@ -1356,6 +1318,9 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise(results_dir: str = "
     J_values = [combo[0] for combo in J_h_combinations]
     min_J, max_J = min(J_values), max(J_values)
     
+    # Store magnetization data for inset
+    magnetization_data = {}
+    
     for combo_idx, (J, h) in enumerate(J_h_combinations):
         # Color based on J value (blues to reds)
         color = plt.cm.rainbow((J - min_J) / (max_J - min_J))
@@ -1380,8 +1345,7 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise(results_dir: str = "
             # Calculate raw correlations (without subtracting individual expectations)
             raw_correlations = []
             valid_distances = []
-            truncation_errors = []
-            std_errors = []
+            total_errors = []
             
             for i, j in site_pairs:
                 # Get ZZ correlation
@@ -1392,20 +1356,40 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise(results_dir: str = "
                 zz_data = vc_measurements[zz_label]
                 raw_correlations.append(zz_data['mean'])
                 valid_distances.append(j - i)
-                truncation_errors.append(zz_data['truncation_error'])
-                std_errors.append(zz_data['std_error'])
+                total_errors.append(zz_data['total_error'])
+            
+            # Extract magnetization data for inset
+            positions = []
+            magnetizations = []
+            magnetization_errors = []
+            
+            for i in range(largest_available_system):
+                z_label = f"Z_{i}"
+                if z_label in vc_measurements:
+                    z_data = vc_measurements[z_label]
+                    positions.append(i)
+                    magnetizations.append(z_data['mean'])
+                    magnetization_errors.append(z_data['total_error'])
+            
+            # Store magnetization data for this J,h combination
+            magnetization_data[(J, h)] = {
+                'positions': positions,
+                'magnetizations': magnetizations,
+                'errors': magnetization_errors,
+                'color': color
+            }
             
             if len(raw_correlations) > 0:
-                # Plot raw correlations with error bars
+                # Plot raw correlations with error bars, add transparency for more sophisticated look
                 ax.plot(valid_distances, raw_correlations, 'o-', 
                        color=color, linewidth=2, markersize=6, 
                        label=f'J={J}, h={h}')
                 
-                # Add error bars
+                # Add error bars with transparency
                 ax.errorbar(valid_distances, raw_correlations, 
-                           yerr=truncation_errors, fmt='none', 
+                           yerr=total_errors, fmt='none', 
                            capsize=3, capthick=1, ecolor=color, 
-                           elinewidth=1, alpha=0.6)
+                           elinewidth=1)
                 
                 print(f"  J={J}, h={h}: {len(raw_correlations)} data points")
             else:
@@ -1420,10 +1404,47 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise(results_dir: str = "
     ax.set_ylabel('$\langle \sigma^Z_i \sigma^Z_j \\rangle$', fontsize=12)
     ax.set_title(f'Raw Spin-Spin Correlations vs Distance\nSystem: {largest_available_system}+{largest_available_bath} qubits, Zero Noise', fontsize=14)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=10)
+    
+    # Move legend to top left, slightly to the left of where inset will be
+    ax.legend(fontsize=10, loc='upper left', bbox_to_anchor=(0.2, 0.98))
     
     # Set x-ticks to integers
     ax.set_xticks(distances)
+    
+    # Create inset for magnetization vs position in top right corner
+    if magnetization_data:
+        # Create larger inset in top right corner, taking up more space
+        axins = ax.inset_axes([0.515, 0.52, 0.47, 0.47])
+        
+        # Plot magnetization data for each J,h combination
+        for (J, h), data in magnetization_data.items():
+            positions = data['positions']
+            magnetizations = data['magnetizations']
+            errors = data['errors']
+            color = data['color']
+            
+            if len(positions) > 0:
+                # Plot magnetization with error bars, add transparency for more sophisticated look
+                axins.plot(positions, magnetizations, 'o-', 
+                          color=color, linewidth=2, markersize=4, 
+                          label=f'J={J}, h={h}')
+                
+                # Add error bars with transparency
+                axins.errorbar(positions, magnetizations, 
+                              yerr=errors, fmt='none', 
+                              capsize=3, capthick=1, ecolor=color, 
+                              elinewidth=1)
+        
+        # Customize inset - remove title, increase font sizes
+        axins.set_xlabel('Position i', fontsize=11)
+        axins.set_ylabel('$\langle \sigma^Z_i \\rangle$', fontsize=11)
+        axins.grid(True, alpha=0.3)
+        
+        # Set x-ticks to integers for inset
+        if largest_available_system:
+            axins.set_xticks(range(0, largest_available_system, max(1, largest_available_system//6)))
+        
+        # Remove inset legend as requested
     
     plt.tight_layout()
     
@@ -1523,6 +1544,10 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
     # Colors for different noise levels
     colors = plt.cm.viridis(np.linspace(0, 1, len(noise_factors)))
     
+    # Store plateau values for inset
+    plateau_values = []
+    noise_levels_for_plateau = []
+    
     print(f"Analyzing raw spin-spin correlations vs distance for different noise levels")
     print(f"System: {largest_available_system}+{largest_available_bath} qubits, J={J}, h={h}")
     
@@ -1550,8 +1575,7 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
             # Calculate raw correlations (without subtracting individual expectations)
             raw_correlations = []
             valid_distances = []
-            truncation_errors = []
-            std_errors = []
+            total_errors = []
             
             for i, j in site_pairs:
                 # Get ZZ correlation
@@ -1562,8 +1586,7 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
                 zz_data = vc_measurements[zz_label]
                 raw_correlations.append(zz_data['mean'])
                 valid_distances.append(j - i)
-                truncation_errors.append(zz_data['truncation_error'])
-                std_errors.append(zz_data['std_error'])
+                total_errors.append(zz_data['total_error'])
             
             if len(raw_correlations) > 0:
                 color = colors[noise_idx]
@@ -1575,11 +1598,27 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
                 
                 # Add error bars
                 ax.errorbar(valid_distances, raw_correlations, 
-                           yerr=truncation_errors, fmt='none', 
+                           yerr=total_errors, fmt='none', 
                            capsize=2, capthick=1, ecolor=color, 
                            elinewidth=1, alpha=0.6)
                 
-                print(f"  Noise {noise_factor:.1f}: {len(raw_correlations)} data points")
+                # Analyze plateau value
+                # Look for plateau in the specific distance range |i-j| = 12 to 18
+                plateau_mask = (np.array(valid_distances) >= 12) & (np.array(valid_distances) <= 18)
+                
+                if np.any(plateau_mask):
+                    plateau_correlations = np.array(raw_correlations)[plateau_mask]
+                    plateau_distances = np.array(valid_distances)[plateau_mask]
+                    plateau_value = np.mean(plateau_correlations)
+                    plateau_values.append(plateau_value)
+                    noise_levels_for_plateau.append(noise_factor)
+                    
+                    # Add horizontal dotted line at plateau value
+                    ax.axhline(y=plateau_value, color=color, linestyle=':', alpha=0.5, linewidth=1)
+                    
+                    print(f"  Noise {noise_factor:.1f}: {len(raw_correlations)} data points, plateau value = {plateau_value:.4f} (distances {plateau_distances})")
+                else:
+                    print(f"  Noise {noise_factor:.1f}: {len(raw_correlations)} data points, no plateau detected in range |i-j| = 12-18")
             else:
                 print(f"  Noise {noise_factor:.1f}: No raw correlation data found")
                 
@@ -1592,7 +1631,6 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
     ax.set_ylabel('$\langle \sigma^Z_i \sigma^Z_j \\rangle$', fontsize=12)
     ax.set_title(f'Raw Spin-Spin Correlations vs Distance for Different Noise Levels\nSystem: {largest_available_system}+{largest_available_bath} qubits, J={J}, h={h}', fontsize=14)
     ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=10, ncol=2)
     
     # Set x-ticks to integers
     ax.set_xticks(distances)
@@ -1604,6 +1642,29 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
     cbar = plt.colorbar(sm, ax=ax, shrink=0.8, aspect=30)
     cbar.set_label('Noise Factor', fontsize=12)
     cbar.set_ticks(np.linspace(0, 1, 6))  # Show 6 ticks from 0 to 1
+    
+    # Create inset for plateau values vs noise
+    if len(plateau_values) > 1:
+        # Create inset in the upper right corner
+        axins = ax.inset_axes([0.6, 0.6, 0.35, 0.35])
+        
+        # Sort by noise level
+        sorted_indices = np.argsort(noise_levels_for_plateau)
+        sorted_noise = [noise_levels_for_plateau[i] for i in sorted_indices]
+        sorted_plateau = [plateau_values[i] for i in sorted_indices]
+
+        # Connect points with line
+        axins.plot(sorted_noise, sorted_plateau, '-', color='red', linewidth=2, alpha=0.7)
+        
+        # Plot plateau values vs noise with matching colors
+        for i, (noise, plateau) in enumerate(zip(sorted_noise, sorted_plateau)):
+            color = plt.cm.viridis(noise)  # Use noise factor as color
+            axins.plot(noise, plateau, 'o', color=color, markersize=6)
+
+        axins.set_xlabel('Noise Factor', fontsize=10)
+        axins.set_ylabel('Plateau Value', fontsize=10)
+        axins.set_title('Plateau Value vs Noise', fontsize=11)
+        axins.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
@@ -1618,6 +1679,7 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
     print(f"System size: {largest_available_system}+{largest_available_bath} qubits")
     print(f"Parameters: J={J}, h={h}")
     print(f"Noise levels: {len(noise_factors)} (0.0 to 1.0)")
+    print(f"Plateau values found: {len(plateau_values)}/{len(noise_factors)} noise levels")
     
     plt.show()
 
