@@ -48,11 +48,11 @@ def get_marker_for_jh(J, h):
     if (J, h) == (0.6, 0.4):
         return 'o'  # Circle
     elif (J, h) == (0.55, 0.45):
-        return 's'  # Square
+        return 'p'  # Square
     elif (J, h) == (0.45, 0.55):
-        return '^'  # Triangle
+        return 'v'  # Triangle
     elif (J, h) == (0.4, 0.6):
-        return 'D'  # Diamond
+        return 's'  # Diamond
     else:
         return 'o'  # Default to circle
 
@@ -107,7 +107,9 @@ def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float,
 def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results", 
                                           output_dir: str = "plots/final",
                                           J: float = 0.6, h: float = 0.4,
-                                          marker_alpha: float = 0.8, line_alpha: float = 0.6) -> None:
+                                          marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                          linewidth: float = 1.5, markersize: float = 6,
+                                          ax: Optional[plt.Axes] = None) -> None:
     """
     Plot energy density above ground state vs two-qubit gate error rate for different system sizes.
     
@@ -131,8 +133,13 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
     # Fixed parameters
     num_sweeps = 12
     
-    # Create figure
-    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    # Create figure if no axis provided
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+        create_new_figure = True
+    else:
+        fig = ax.figure
+        create_new_figure = False
     
     # Define line styles for different system sizes (largest gets solid line)
     line_styles = [':','-.','--','-']  # 4, 8, 16, 28 qubits
@@ -232,20 +239,21 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
         
         # Add line connecting points with appropriate linestyle
         ax.plot(two_qubit_noise_levels, energy_densities, 
-               color='gray', linestyle=linestyle, linewidth=1.5, alpha=line_alpha, zorder=1)
+               color='gray', linestyle=linestyle, linewidth=linewidth, alpha=line_alpha, zorder=1)
         
         # Add error bars with colors matching the markers
         for i, (x, y, err) in enumerate(zip(two_qubit_noise_levels, energy_densities, total_errors)):
             color = plt.cm.viridis(x / 0.01)  # Scale to 0-1 range for colormap
             ax.errorbar([x], [y], yerr=[err], fmt='none', 
-                       capsize=4, capthick=1.5, ecolor=color, 
-                       elinewidth=1.5, alpha=marker_alpha, zorder=2)
+                       capsize=4, capthick=linewidth, ecolor=color, 
+                       elinewidth=linewidth, alpha=marker_alpha, zorder=2)
         
-        # Create scatter plot with colormap based on two-qubit noise level and J,h marker
-        scatter = ax.scatter(two_qubit_noise_levels, energy_densities, 
-                           c=two_qubit_noise_levels, cmap='viridis', 
-                           s=60, alpha=marker_alpha, marker=marker,
-                           label=f'{system_qubits} + {system_qubits//2} qubits', zorder=3)
+        # Create plot with colormap based on two-qubit noise level and J,h marker
+        for i, (x, y) in enumerate(zip(two_qubit_noise_levels, energy_densities)):
+            color = plt.cm.viridis(x / 0.01)  # Scale to 0-1 range for colormap
+            ax.plot(x, y, marker=marker, color=color, markersize=markersize, 
+                   alpha=marker_alpha, zorder=3, 
+                   label=f'{system_qubits} + {system_qubits//2} qubits' if i == 0 else "")
     
     # # Add colorbar for two-qubit gate error rate
     # norm = plt.Normalize(0, 0.01)
@@ -260,15 +268,15 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
     for i, data in enumerate(all_data):
         system_qubits = data['system_qubits']
         linestyle = data['linestyle']
-        legend_elements.append(Line2D([0], [0], color='gray', linestyle=linestyle, 
-                                    linewidth=1.5, label=f'{system_qubits} + {system_qubits//2} qubits'))
+        legend_elements.append(Line2D([0], [1], color='gray', linestyle=linestyle, 
+                                    linewidth=linewidth, label=f'{system_qubits} + {system_qubits//2} qubits'))
     
     # Customize plot
     ax.set_xlabel('Two-Qubit Gate Error Rate', fontsize=14)
     ax.set_ylabel('Energy Density Above Ground State', fontsize=14)
     ax.set_title(f'Energy Density vs Two-Qubit Gate Error Rate\nJ={J}, h={h}', fontsize=16)
     ax.grid(False) # ax.grid(True, alpha=0.3)
-    ax.legend(handles=legend_elements, fontsize=12, loc='upper left')
+    ax.legend(handles=legend_elements, fontsize=12, loc='upper left', handlelength=3.0)
     
     # Set y-axis to start at 0
     ax.set_ylim(bottom=0)
@@ -276,21 +284,85 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
     # Set x-ticks to show two-qubit noise levels clearly
     ax.set_xticks(np.linspace(0, 0.01, 6))
     
+    # Only save and show if this is a new figure
+    if create_new_figure:
+        plt.tight_layout()
+        
+        # Save the plot
+        filename = f"energy_density_vs_two_qubit_noise_J{J}_h{h}"
+        filepath_pdf = os.path.join(output_dir, filename+".pdf")
+        filepath_png = os.path.join(output_dir, filename+".png")
+        plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
+        plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+        
+        plt.show()
+
+
+def plot_energy_density_vs_two_qubit_noise_two_panels(results_dir: str = "results", 
+                                                     output_dir: str = "plots/final",
+                                                     marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                     linewidth: float = 1.5, markersize: float = 6) -> None:
+    """
+    Plot energy density above ground state vs two-qubit gate error rate for different system sizes
+    in two panels (J=0.6,h=0.4 and J=0.4,h=0.6) with shared y-axis.
+    
+    Args:
+        results_dir: directory containing results
+        output_dir: directory to save plots
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        linewidth: line width
+        markersize: marker size
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Define J,h combinations (switched order)
+    J_h_combinations = [(0.4, 0.6), (0.6, 0.4)]
+    
+    # Create figure with two subplots sharing y-axis
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8), sharey=True)
+    axes = [ax1, ax2]
+    
+    print("Creating two-panel energy density vs two-qubit noise plot")
+    
+    # Plot each J,h combination
+    for panel_idx, (J, h) in enumerate(J_h_combinations):
+        ax = axes[panel_idx]
+        
+        # Call the existing function with the specific axis
+        plot_energy_density_vs_two_qubit_noise(results_dir, output_dir, J, h,
+                                              marker_alpha, line_alpha, linewidth, markersize, ax)
+        
+        # Update title for each panel
+        ax.set_title(f'J={J}, h={h}', fontsize=16)
+        
+        # Only show y-label on the left panel
+        if panel_idx == 0:
+            ax.set_ylabel('Energy Density Above Ground State', fontsize=14)
+        else:
+            ax.set_ylabel('')  # Remove y-label from right panel
+    
+    # Adjust layout
     plt.tight_layout()
     
     # Save the plot
-    filename = f"energy_density_vs_two_qubit_noise_J{J}_h{h}"
+    filename = "energy_density_vs_two_qubit_noise_two_panels"
     filepath_pdf = os.path.join(output_dir, filename+".pdf")
     filepath_png = os.path.join(output_dir, filename+".png")
     plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
     plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    
+    print(f"Two-panel energy density plot saved to: {filepath_pdf}")
+    print(f"Two-panel energy density plot saved to: {filepath_png}")
     
     plt.show()
 
 
 def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir: str = "results", 
                                                                    output_dir: str = "plots/final",
-                                                                   marker_alpha: float = 0.8, line_alpha: float = 0.6) -> None:
+                                                                   marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                                   linewidth: float = 1.5, markersize: float = 6) -> None:
     """
     Plot raw spin-spin correlations <sigma^Z_i sigma^Z_j> vs distance for different J,h combinations at zero noise.
     Uses the largest available system size. Does NOT subtract individual expectations.
@@ -407,14 +479,14 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
                 
                 # Plot raw correlations with error bars
                 ax.plot(valid_distances, raw_correlations, 
-                       color=color, marker=marker, linewidth=1.5, 
-                       markersize=8, alpha=line_alpha, label=f'J={J}, h={h}')
+                       color=color, marker=marker, linewidth=linewidth, 
+                       markersize=markersize, alpha=line_alpha, label=f'J={J}, h={h}')
                 
                 # Add error bars with matching colors
                 ax.errorbar(valid_distances, raw_correlations, 
                            yerr=total_errors, fmt='none', 
-                           capsize=4, capthick=1.5, ecolor=color, 
-                           elinewidth=1.5, alpha=marker_alpha)
+                           capsize=4, capthick=linewidth, ecolor=color, 
+                           elinewidth=linewidth, alpha=marker_alpha)
                 
                 print(f"  J={J}, h={h}: {len(raw_correlations)} data points")
             else:
@@ -442,7 +514,9 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
     # cbar.set_label('Two-Qubit Gate Error Rate', fontsize=12)
     # cbar.set_ticks(np.linspace(0, 0.01, 6))  # Show 6 ticks from 0 to 0.01
     
-    plt.tight_layout()
+    # Set consistent subplot parameters to match the other figure
+    # This ensures the main axes have the same size as the figure with colorbar and inset
+    plt.subplots_adjust(left=0.12, right=0.95, top=0.9, bottom=0.15)
     
     # Save the plot
     filename = f"raw_spin_spin_correlations_different_jh_zero_noise_no_inset_sys{largest_available_system}"
@@ -458,7 +532,9 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
 
 def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str = "results", 
                                                               output_dir: str = "plots/final",
-                                                              marker_alpha: float = 0.8, line_alpha: float = 0.6) -> None:
+                                                              marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                              colorbar_orientation: str = "vertical",
+                                                              linewidth: float = 1.5, markersize: float = 6) -> None:
     """
     Plot raw spin-spin correlations <sigma^Z_i sigma^Z_j> vs distance for different noise levels at fixed J=0.6, h=0.4.
     Uses the largest available system size. Does NOT subtract individual expectations.
@@ -467,6 +543,9 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
     Args:
         results_dir: directory containing results
         output_dir: directory to save plots
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        colorbar_orientation: orientation of colorbar ("vertical", "horizontal", or "none")
     """
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -591,14 +670,14 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
                 
                 # Plot raw correlations with error bars using consistent marker
                 ax.plot(valid_distances, raw_correlations, 
-                       color=color, marker=marker, linewidth=1.5, markersize=4, 
+                       color=color, marker=marker, linewidth=linewidth, markersize=markersize, 
                        alpha=line_alpha, label=f'Noise {noise_factor:.1f}')
                 
                 # Add error bars with matching colors
                 ax.errorbar(valid_distances, raw_correlations, 
                            yerr=total_errors, fmt='none', 
-                           capsize=2, capthick=1, ecolor=color, 
-                           elinewidth=1.5, alpha=marker_alpha)
+                           capsize=4, capthick=linewidth, ecolor=color, 
+                           elinewidth=linewidth, alpha=marker_alpha)
                 
                 # Analyze plateau value
                 # Look for plateau in the specific distance range |i-j| = 12 to 18
@@ -633,13 +712,30 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
     # Set x-ticks to integers
     ax.set_xticks(distances)
     
-    # Add colorbar for two-qubit gate error rate
-    norm = plt.Normalize(0, 0.01)
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax, shrink=0.8, aspect=30)
-    cbar.set_label('Two-Qubit Gate Error Rate', fontsize=12)
-    cbar.set_ticks(np.linspace(0, 0.01, 6))  # Show 6 ticks from 0 to 0.01
+    # Set subplot parameters based on colorbar orientation
+    if colorbar_orientation == "none":
+        # No colorbar - use standard layout
+        plt.subplots_adjust(left=0.12, right=0.95, top=0.9, bottom=0.15)
+    elif colorbar_orientation == "horizontal":
+        # Horizontal colorbar at bottom - adjust bottom margin
+        plt.subplots_adjust(left=0.12, right=0.95, top=0.9, bottom=0.2)
+    else:  # vertical
+        # Vertical colorbar on right - adjust right margin
+        plt.subplots_adjust(left=0.12, right=0.85, top=0.9, bottom=0.15)
+    
+    # Add colorbar for two-qubit gate error rate based on orientation
+    if colorbar_orientation != "none":
+        norm = plt.Normalize(0, 0.01)
+        sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
+        sm.set_array([])
+        
+        if colorbar_orientation == "horizontal":
+            cbar = plt.colorbar(sm, ax=ax, orientation='horizontal', shrink=0.8, aspect=30, pad=0.1)
+        else:  # vertical
+            cbar = plt.colorbar(sm, ax=ax, shrink=0.8, aspect=30)
+        
+        cbar.set_label('Two-Qubit Gate Error Rate', fontsize=12)
+        cbar.set_ticks(np.linspace(0, 0.01, 6))  # Show 6 ticks from 0 to 0.01
     
     # Create inset for plateau values vs noise
     if len(plateau_values) > 1:
@@ -656,17 +752,15 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
             # Convert noise factor to actual two-qubit gate error rate
             two_qubit_error_rate = noise * 0.01  # noise factor * base_two_qubit_noise
             color = plt.cm.viridis(two_qubit_error_rate / 0.01)  # Scale to 0-1 range for viridis colormap
-            axins.plot(two_qubit_error_rate, plateau, marker, color=color, markersize=6, alpha=marker_alpha)
+            axins.plot(two_qubit_error_rate, plateau, marker=marker, color=color, markersize=markersize, alpha=marker_alpha)
 
         axins.set_xlabel('Two-Qubit Gate Error Rate', fontsize=10)
         axins.set_ylabel('Plateau Value', fontsize=10)
         axins.set_title('Plateau Value vs Noise', fontsize=11)
         axins.grid(False) # axins.grid(True, alpha=0.3)
     
-    plt.tight_layout()
-    
     # Save the plot
-    filename = f"raw_spin_spin_correlations_different_noise_J{J}_h{h}_sys{largest_available_system}"
+    filename = f"raw_spin_spin_correlations_different_noise_J{J}_h{h}_sys{largest_available_system}_cbar_{colorbar_orientation}"
     filepath_pdf = os.path.join(output_dir, filename+".pdf")
     filepath_png = os.path.join(output_dir, filename+".png")
     plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
@@ -689,61 +783,49 @@ def create_final_figures(results_dir: str = "results", output_dir: str = "plots/
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # 1. Energy density vs two-qubit noise for J=0.6, h=0.4
-    print("\n1. Creating energy density vs two-qubit noise plot (J=0.6, h=0.4)...")
-    plot_energy_density_vs_two_qubit_noise(results_dir, output_dir, J=0.6, h=0.4, 
-                                          marker_alpha=marker_alpha, line_alpha=line_alpha)
+    # 1. Energy density vs two-qubit noise (two panels with shared y-axis)
+    print("\n1. Creating two-panel energy density vs two-qubit noise plot...")
+    plot_energy_density_vs_two_qubit_noise_two_panels(results_dir, output_dir,
+                                                     marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                     linewidth=4, markersize=12)
     
-    # 2. Energy density vs two-qubit noise for J=0.4, h=0.6
-    print("\n2. Creating energy density vs two-qubit noise plot (J=0.4, h=0.6)...")
-    plot_energy_density_vs_two_qubit_noise(results_dir, output_dir, J=0.4, h=0.6,
-                                          marker_alpha=marker_alpha, line_alpha=line_alpha)
-    
-    # 3. Raw spin-spin correlations for different J,h at zero noise (no inset)
-    print("\n3. Creating raw spin-spin correlations plot for different J,h (no inset)...")
+    # 2. Raw spin-spin correlations for different J,h at zero noise (no inset)
+    print("\n2. Creating raw spin-spin correlations plot for different J,h (no inset)...")
     plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir, output_dir,
-                                                                    marker_alpha=marker_alpha, line_alpha=line_alpha)
+                                                                    marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                                    linewidth=1.5, markersize=10)
     
-    # 4. Raw spin-spin correlations for different noise levels (no red line in inset)
-    print("\n4. Creating raw spin-spin correlations plot for different noise levels (no red line)...")
+    # 3. Raw spin-spin correlations for different noise levels (no red line in inset)
+    print("\n3. Creating raw spin-spin correlations plot for different noise levels (no red line)...")
+    
+    # Create three versions with different colorbar orientations
+    print("  3a. Creating version with vertical colorbar...")
     plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir,
-                                                               marker_alpha=marker_alpha, line_alpha=line_alpha)
+                                                               marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                               colorbar_orientation="vertical",
+                                                               linewidth=1.5, markersize=10)
+    
+    print("  3b. Creating version with horizontal colorbar...")
+    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir,
+                                                               marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                               colorbar_orientation="horizontal",
+                                                               linewidth=1.5, markersize=10)
+    
+    print("  3c. Creating version without colorbar...")
+    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir,
+                                                               marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                               colorbar_orientation="none",
+                                                               linewidth=1.5, markersize=10)
     
     print("\n" + "=" * 50)
     print("All final figures created successfully!")
     print(f"Figures saved to: {output_dir}")
 
 
-def main():
-    """Main function for command line usage."""
-    parser = argparse.ArgumentParser(description='Create final figures for variational cooling data')
-    
-    parser.add_argument('--results_dir', type=str, default='results', help='Results directory')
-    parser.add_argument('--output_dir', type=str, default='plots/final', help='Output directory for plots')
-    parser.add_argument('--marker_alpha', type=float, default=1., help='Alpha value for markers and error bars')
-    parser.add_argument('--line_alpha', type=float, default=1., help='Alpha value for lines')
-    
-    args = parser.parse_args()
-    
-    # Create all final figures
-    create_final_figures(
-        results_dir=args.results_dir,
-        output_dir=args.output_dir,
-        marker_alpha=args.marker_alpha,
-        line_alpha=args.line_alpha
-    )
-
-
 if __name__ == "__main__":
-    # Check if command line arguments were provided
-    import sys
-    if len(sys.argv) > 1:
-        # Use command line arguments
-        main()
-    else:
-        # Run with default parameters
-        print("Final Figures Generation for Variational Cooling")
-        print("=" * 50)
-        
-        # Create all final figures with default alpha values
-        create_final_figures(marker_alpha=1., line_alpha=1.)
+    # Run with default parameters
+    print("Final Figures Generation for Variational Cooling")
+    print("=" * 50)
+    
+    # Create all final figures with default alpha values
+    create_final_figures(marker_alpha=1., line_alpha=1.)
