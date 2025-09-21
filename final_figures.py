@@ -317,8 +317,8 @@ def plot_energy_density_vs_two_qubit_noise_two_panels(results_dir: str = "result
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Define J,h combinations (switched order)
-    J_h_combinations = [(0.4, 0.6), (0.6, 0.4)]
+    # Define J,h combinations
+    J_h_combinations = [(0.4, 0.6),(0.6, 0.4)]
     
     # Create figure with two subplots sharing y-axis
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8), sharey=True)
@@ -343,6 +343,12 @@ def plot_energy_density_vs_two_qubit_noise_two_panels(results_dir: str = "result
         else:
             ax.set_ylabel('')  # Remove y-label from right panel
     
+    # make the extent of the y-axis cover the entire range of the data
+    ax1.set_ylim(bottom=0)
+    ax2.set_ylim(bottom=0)
+    ax1.set_ylim(top=0.24)
+    ax2.set_ylim(top=0.24)
+
     # Adjust layout
     plt.tight_layout()
     
