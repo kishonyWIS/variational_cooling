@@ -13,68 +13,86 @@ import numpy as np
 # CONFIGURATION - All parameters defined here
 # =============================================================================
 
-# System sizes: [(4,2), (8,4), (12,6), (16,8), (20,10), (24,12), (28, 14)]
-SYSTEM_SIZES = [(4, 2), (8, 4), (12, 6)]#, (16, 8), (20, 10), (24, 12), (28, 14)]
+# Study configurations
+STUDY_CONFIGS = {
+    'original': {
+        'system_sizes': [(4, 2), (8, 4), (12, 6)],  #, (16, 8), (20, 10), (24, 12), (28, 14)],
+        'j_h_list': [(0.4, 0.6), (0.45, 0.55), (0.55, 0.45), (0.6, 0.4)],
+        'noise_factors': np.linspace(0, 1, 11),
+        'training_methods': ['energy'],
+        'description': 'comprehensive parameter sweep'
+    },
+    'alternative': {
+        'system_sizes': [(16, 8), (20, 10), (24, 12), (28, 14)],
+        'j_h_list': [(0.4, 0.6), (0.45, 0.55)],
+        'noise_factors': [0.0],
+        'training_methods': ["pruning", "random_initialization", "reoptimize_different_states"],
+        'description': 'alternative training methods study'
+    }
+}
 
-# J, h combinations: [(0.4,0.6), (0.45,0.55), (0.55, 0.45), (0.6, 0.4)]
-J_H_LIST = [(0.4, 0.6), (0.45, 0.55), (0.55, 0.45), (0.6, 0.4)]
-
-# Noise levels: (0.001, 0.01) * np.linspace(0, 1, 11)
-NOISE_FACTORS = np.linspace(0, 1, 11)
+# Common parameters
 BASE_SINGLE_QUBIT_NOISE = 0.001
 BASE_TWO_QUBIT_NOISE = 0.01
-
-# Fixed parameters
 P = 3
 NUM_SWEEPS = 12
-TRAINING_METHOD = 'energy'
 INITIAL_STATE = 'zeros'
 BOND_DIMENSIONS = [32, 64]
-BASE_SHOTS = 1000  # Base shots for BASE_TOTAL_SYSTEM_SIZE (28+14)
+BASE_SHOTS = 100  # Base shots for BASE_TOTAL_SYSTEM_SIZE (28+14)
 BASE_TOTAL_SYSTEM_SIZE = 28 + 14
 OPEN_BOUNDARY = 1
 
 # Job configuration
-OUTPUT_DIR = "jobs"
-JOB_NAME = "data_collection"
 WALL_TIME = "24:00"  # Match cluster setting
 MEMORY = "4GB"       # Increased for larger system sizes
 CORES = 1
 QUEUE = "berg"       # Change to berg queue for this cluster
 
 
-def create_parameter_sets():
+def create_parameter_sets(study_type="original"):
     """
     Create parameter sets for data_collection.py study.
+    
+    Args:
+        study_type: "original" for comprehensive parameter sweep, 
+                   "alternative" for alternative training methods study
+    
+    Returns:
+        list: List of parameter dictionaries for each combination
     """
+    if study_type not in STUDY_CONFIGS:
+        raise ValueError(f"Unknown study_type: {study_type}. Available: {list(STUDY_CONFIGS.keys())}")
+    
+    config = STUDY_CONFIGS[study_type]
     parameter_sets = []
     
     # Generate all combinations
-    for J, h in J_H_LIST:
-        for noise_factor in NOISE_FACTORS:
-            for system_qubits, bath_qubits in SYSTEM_SIZES:
-                # Calculate shots based on system size
-                current_total = system_qubits + bath_qubits
-                
-                # Calculate scaling factor (larger systems get fewer shots)
-                scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
-                num_shots = int(BASE_SHOTS * scaling_factor)
-                
-                parameter_sets.append({
-                    'system_qubits': system_qubits,
-                    'bath_qubits': bath_qubits,
-                    'open_boundary': OPEN_BOUNDARY,
-                    'J': J,
-                    'h': h,
-                    'p': P,
-                    'num_sweeps': NUM_SWEEPS,
-                    'single_qubit_gate_noise': BASE_SINGLE_QUBIT_NOISE * noise_factor,
-                    'two_qubit_gate_noise': BASE_TWO_QUBIT_NOISE * noise_factor,
-                    'training_method': TRAINING_METHOD,
-                    'initial_state': INITIAL_STATE,
-                    'bond_dimensions': BOND_DIMENSIONS,
-                    'num_shots': num_shots
-                })
+    for J, h in config['j_h_list']:
+        for noise_factor in config['noise_factors']:
+            for system_qubits, bath_qubits in config['system_sizes']:
+                for training_method in config['training_methods']:
+                    # Calculate shots based on system size
+                    current_total = system_qubits + bath_qubits
+                    
+                    # Calculate scaling factor (larger systems get fewer shots)
+                    scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
+                    num_shots = int(BASE_SHOTS * scaling_factor)
+                    
+                    parameter_sets.append({
+                        'system_qubits': system_qubits,
+                        'bath_qubits': bath_qubits,
+                        'open_boundary': OPEN_BOUNDARY,
+                        'J': J,
+                        'h': h,
+                        'p': P,
+                        'num_sweeps': NUM_SWEEPS,
+                        'single_qubit_gate_noise': BASE_SINGLE_QUBIT_NOISE * noise_factor,
+                        'two_qubit_gate_noise': BASE_TWO_QUBIT_NOISE * noise_factor,
+                        'training_method': training_method,
+                        'initial_state': INITIAL_STATE,
+                        'bond_dimensions': BOND_DIMENSIONS,
+                        'num_shots': num_shots
+                    })
     
     return parameter_sets
 
@@ -258,13 +276,34 @@ def create_monitor_script(job_scripts, output_dir="jobs"):
 
 
 if __name__ == "__main__":
-    print("Generating cluster jobs for data_collection.py parameter sweep...")
-    print(f"Output directory: {OUTPUT_DIR}")
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Generate cluster jobs for data_collection.py')
+    parser.add_argument('--study-type', choices=['original', 'alternative'], default='alternative',
+                       help='Type of study: original (comprehensive sweep) or alternative (training methods)')
+    parser.add_argument('--output-dir', default=None, help='Override output directory')
+    parser.add_argument('--job-name', default=None, help='Override job name')
+    
+    args = parser.parse_args()
+    
+    # Set output directory and job name based on study type
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = f"jobs_{args.study_type}"
+    
+    if args.job_name:
+        job_name = args.job_name
+    else:
+        job_name = f"{args.study_type}_data_collection"
+    
+    print(f"Generating cluster jobs for {args.study_type} data_collection.py study...")
+    print(f"Output directory: {output_dir}")
     print("Each parameter set will run in a separate job")
     
     # Check if jobs directory exists and warn user
-    if os.path.exists(OUTPUT_DIR):
-        print(f"Warning: Jobs directory '{OUTPUT_DIR}' already exists.")
+    if os.path.exists(output_dir):
+        print(f"Warning: Jobs directory '{output_dir}' already exists.")
         print("This will overwrite existing job files. Press Ctrl+C to cancel or Enter to continue...")
         try:
             input()
@@ -276,27 +315,34 @@ if __name__ == "__main__":
     print()
     
     # Get all parameter sets
-    print("Generating all parameter sets...")
-    all_parameter_sets = create_parameter_sets()
+    print(f"Generating {args.study_type} parameter sets...")
+    all_parameter_sets = create_parameter_sets(args.study_type)
     print(f"Total parameter sets: {len(all_parameter_sets)}")
     
     # Print summary of parameter combinations
-    print("\nParameter combinations summary:")
+    config = STUDY_CONFIGS[args.study_type]
+    print(f"\n{args.study_type.title()} parameter combinations summary:")
+    print(f"Description: {config['description']}")
     print("=" * 50)
     
     # Summary by J,h values
-    for J, h in J_H_LIST:
+    for J, h in config['j_h_list']:
         count = sum(1 for params in all_parameter_sets if params['J'] == J and params['h'] == h)
         print(f"J={J}, h={h}: {count} combinations")
     
     # Summary by system size
-    for sys_qubits, bath_qubits in SYSTEM_SIZES:
+    for sys_qubits, bath_qubits in config['system_sizes']:
         count = sum(1 for params in all_parameter_sets 
                    if params['system_qubits'] == sys_qubits and params['bath_qubits'] == bath_qubits)
         print(f"{sys_qubits}+{bath_qubits} qubits: {count} combinations")
     
+    # Summary by training methods
+    for training_method in config['training_methods']:
+        count = sum(1 for params in all_parameter_sets if params['training_method'] == training_method)
+        print(f"Training method '{training_method}': {count} combinations")
+    
     # Summary by noise levels
-    for noise_factor in NOISE_FACTORS:
+    for noise_factor in config['noise_factors']:
         count = sum(1 for params in all_parameter_sets 
                    if abs(params['single_qubit_gate_noise'] - BASE_SINGLE_QUBIT_NOISE * noise_factor) < 1e-6)
         print(f"Noise factor {noise_factor:.1f}: {count} combinations")
@@ -304,7 +350,7 @@ if __name__ == "__main__":
     # Summary of shot allocation
     print("\nShot allocation by system size:")
     print("-" * 30)
-    for sys_qubits, bath_qubits in SYSTEM_SIZES:
+    for sys_qubits, bath_qubits in config['system_sizes']:
         current_total = sys_qubits + bath_qubits
         scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
         shots = int(BASE_SHOTS * scaling_factor)
@@ -316,8 +362,8 @@ if __name__ == "__main__":
     print(f"\nGenerating job files for {len(all_parameter_sets)} parameter combinations...")
     job_scripts = generate_jobs(
         all_parameter_sets, 
-        output_dir=OUTPUT_DIR,
-        job_name=JOB_NAME,
+        output_dir=output_dir,
+        job_name=job_name,
         wall_time=WALL_TIME,
         memory=MEMORY,
         cores=CORES,
@@ -325,11 +371,11 @@ if __name__ == "__main__":
     )
     
     # Create submit all script
-    submit_script = create_submit_all_script(job_scripts, OUTPUT_DIR)
+    submit_script = create_submit_all_script(job_scripts, output_dir)
     print(f"Submit script: {submit_script}")
     
     # Create monitor script
-    monitor_script = create_monitor_script(job_scripts, OUTPUT_DIR)
+    monitor_script = create_monitor_script(job_scripts, output_dir)
     print(f"Monitor script: {monitor_script}")
     
     print(f"\nTo submit all jobs:")
