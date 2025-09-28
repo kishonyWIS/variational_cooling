@@ -233,7 +233,6 @@ $RECYCLE.BIN/
 .nfs*
 
 # Project-specific files
-*.csv
 !requirements.txt
 
 # Generated directories

@@ -81,16 +81,16 @@ def create_circuit_with_measurements(p, system_qubits, bath_qubits, parameters, 
         for i in range(p):   
             # H_1: brick-wall layout of RZZ gates on system bonds, and Z-rotations on bath qubits
             for j in range(0, system_qubits-open_boundary, 2):
-                qc.rzz(-J*alpha[i], j, (j+1)%system_qubits)
+                qc.rzz(-alpha[i], j, (j+1)%system_qubits)
             for j in range(1, system_qubits-open_boundary, 2):
-                qc.rzz(-J*alpha[i], j, (j+1)%system_qubits)                
+                qc.rzz(-alpha[i], j, (j+1)%system_qubits)                
 
             for j in range(system_qubits, num_qubits):
                 qc.rz(-B_t[i], j)
                 
             # H_2: RX rotations on system qubits
             for j in range(system_qubits):
-                qc.rx(-h*beta[i], j)
+                qc.rx(-beta[i], j)
                 
             # H_3: RYY gates connecting system and bath qubits
             if half:
@@ -120,6 +120,7 @@ def create_circuit_with_measurements(p, system_qubits, bath_qubits, parameters, 
 
 
 def get_best_parameters(J, h, p):
+    # alpha, beta, B_t, g_t
     """Get pre-optimized parameters for specific J, h, p combinations."""
     if J == 0.4 and h == 0.6 and p == 3:
         best_para = np.array([0.026932368894753006, 0.58775691792609, 1.416345878671235, -0.5847230425335908, 2.108254043912492, 0.9685586146293224, 3.141592653589793, 1.9041272021498745, -0.7655691857212363, 1.463995846549075, 1.062269199105236, 0.450403882505529])
@@ -131,8 +132,46 @@ def get_best_parameters(J, h, p):
         best_para = np.array([0.2758651574486719, 0.39292632015710316, 1.559163323925934, -1.6112927238917285, 3.141592653589793, 1.1794018466868508, 3.141592653589793, 2.0377323161522973, -0.8765720657695009, 1.196657733890989, 0.7242895048133942, 0.39439092939668874])
     else:
         raise ValueError(f"No pre-optimized parameters found for J={J}, h={h}, p={p}")
+    #multiply the first p elements by J and the second p elements by h
+    best_para[:p] *= J
+    best_para[p:2*p] *= h
     return best_para
 
+
+def get_alternative_training_method_parameters(J, h, p, training_method):
+    """
+    Get parameters for alternative training methods. Here we do not need to multiply by J and h, they already have the correct scaling.
+    
+    Args:
+        J: Ising coupling strength
+        h: transverse field strength  
+        p: number of HVA layers per sweep
+        training_method: training method ("pruning", "random_initialization", "reoptimize_different_states")
+    
+    Returns:
+        np.array: parameter array [alpha, beta, B_t, g_t]
+    """
+    if J == 0.4 and h == 0.6 and p == 3:
+        if training_method == "pruning":
+            best_para = np.array([0.1551551407010398, 0.2972339085129281, 0.6622060509101919, -0.26311546898796445, 1.2909728545234098, 0.6203533400492609, 0.04821618998905047, 1.8397933295008086, 2.3808232374975695, 1.4344646684392457, 1.0127314292331813, -0.4957616011237458])
+        elif training_method == "random_initialization":
+            best_para = np.array([0.14426522437923556, 0.26951341259536765, 0.6641984933564933, -0.15948269923616376, 1.269501802512107, 0.5834052451921924, -0.3213306316496988, 1.9184079011186044, -0.8421120046304351, 1.374033285166822, 0.9493215454507471, 0.49705261344126095])
+        elif training_method == "reoptimize_different_states":
+            best_para = np.array([0.04533745967866659, 0.24859304334757648, 0.5641514563080767, -0.271855256701654, 1.3116394638885644, 0.6141276634009168, 2.697877624100211, 1.9100315700654198, -0.9165218608293154, 1.6127563510343188, 1.1873688682300467, 0.489419834089321])
+        else:
+            raise ValueError(f"Unknown training method: {training_method}")
+    elif J == 0.45 and h == 0.55 and p == 3:
+        if training_method == "pruning":
+            best_para = np.array([0.14740288103657095, 0.33316591820154906, 0.6476501266940269, 1.582595123986894, 1.8393781518913657, 0.9046758753211406, 0.34671441184290697, 1.272769051428573, 0.003696539542491886, 1.223684681779273, 1.147042467840846, -0.004594284357454424])
+        elif training_method == "random_initialization":
+            best_para = np.array([0.16034476992359914, 0.30442527419391063, 0.7153524003893963, -0.2604891484008063, 1.2655783140554226, 0.6219694512748641, 0.12571058205831986, 1.8784812097478771, -0.8199037548323007, 1.4472026207495565, 1.041214352842323, 0.4873169290150221])
+        elif training_method == "reoptimize_different_states":
+            best_para = np.array([0.12290940946889312, 0.2561033617153552, 0.6065914213401664, 1.369762579890668, 1.9230271795435683, 0.7164287296868257, -0.49786076092246795, 0.9699584900066698, -1.3757492494546342, 0.979977198520213, 1.3310529377422697, -0.5120531979548613])
+        else:
+            raise ValueError(f"Unknown training method: {training_method}")
+    else:
+        raise ValueError(f"No alternative training method parameters found for J={J}, h={h}, p={p}")
+    return best_para
 
 def create_system_observables(system_qubits, bath_qubits):
     """
@@ -217,8 +256,11 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Get best parameters
-    best_para = get_best_parameters(J, h, p)
+    # Get parameters based on training method
+    if training_method in ["pruning", "random_initialization", "reoptimize_different_states"]:
+        best_para = get_alternative_training_method_parameters(J, h, p, training_method)
+    else:
+        best_para = get_best_parameters(J, h, p)
     
     # Split parameters
     lengths = [p, p, p, p]
@@ -370,7 +412,7 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
     
     # Save data to JSON file
     timestamp = int(time.time())
-    filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}.json"
+    filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}_method{training_method}.json"
     filepath = os.path.join(output_dir, filename)
     
     with open(filepath, 'w') as f:

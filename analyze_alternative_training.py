@@ -43,6 +43,73 @@ def load_ground_state_data(filepath: str) -> Dict[str, Any]:
     return data
 
 
+def generate_variational_cooling_filename(system_qubits, bath_qubits, J, h, num_sweeps, 
+                                         single_qubit_gate_noise, two_qubit_gate_noise, 
+                                         training_method):
+    """
+    Generate consistent filename for variational cooling data files.
+    Handles floating-point precision issues by using proper formatting.
+    
+    Args:
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        J: Ising coupling strength
+        h: transverse field strength
+        num_sweeps: number of sweeps
+        single_qubit_gate_noise: single qubit gate noise level
+        two_qubit_gate_noise: two qubit gate noise level
+        training_method: training method name
+    
+    Returns:
+        str: consistent filename
+    """
+    # Format noise values to avoid floating-point precision issues
+    single_qubit_noise_str = f"{single_qubit_gate_noise:.6f}".rstrip('0').rstrip('.')
+    two_qubit_noise_str = f"{two_qubit_gate_noise:.6f}".rstrip('0').rstrip('.')
+    
+    return f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise_str}_{two_qubit_noise_str}_method{training_method}.json"
+
+
+def find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, num_sweeps, 
+                                 single_qubit_gate_noise, two_qubit_gate_noise, training_method):
+    """
+    Find variational cooling data file, handling floating-point precision issues.
+    
+    Args:
+        results_dir: directory containing results
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        J: Ising coupling strength
+        h: transverse field strength
+        num_sweeps: number of sweeps
+        single_qubit_gate_noise: single qubit gate noise level
+        two_qubit_gate_noise: two qubit gate noise level
+        training_method: training method name
+    
+    Returns:
+        str or None: filepath if found, None otherwise
+    """
+    # Generate clean filename
+    clean_filename = generate_variational_cooling_filename(
+        system_qubits, bath_qubits, J, h, num_sweeps,
+        single_qubit_gate_noise, two_qubit_gate_noise, training_method
+    )
+    
+    # Also generate the potentially problematic filename
+    problematic_filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}_method{training_method}.json"
+    
+    # Check both filenames
+    clean_filepath = os.path.join(results_dir, clean_filename)
+    problematic_filepath = os.path.join(results_dir, problematic_filename)
+    
+    if os.path.exists(clean_filepath):
+        return clean_filepath
+    elif os.path.exists(problematic_filepath):
+        return problematic_filepath
+    else:
+        return None
+
+
 def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float, 
                            system_qubits: int) -> Tuple[float, float]:
     """
@@ -143,7 +210,7 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
     system_sizes = [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)]
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -167,11 +234,11 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
         
         # Collect data for each system size
         for system_qubits, bath_qubits in system_sizes:
-            # Construct filename
-            filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise}_{two_qubit_noise}_method{training_method}.json"
-            filepath = os.path.join(results_dir, filename)
+            # Find file using robust filename matching
+            filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
             
-            if os.path.exists(filepath):
+            if filepath:
                 try:
                     # Load data
                     with open(filepath, 'r') as f:
@@ -213,10 +280,10 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
                     print(f"    {system_qubits}+{bath_qubits} qubits: energy density above GS = {energy_density_above_gs:.6f} ± {total_err:.6f}")
                     
                 except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
-                    print(f"    Warning: Could not process {filename}: {e}")
+                    print(f"    Warning: Could not process {os.path.basename(filepath)}: {e}")
                     continue
             else:
-                print(f"    Warning: File not found: {filename}")
+                print(f"    Warning: File not found for system {system_qubits}+{bath_qubits}")
                 continue
         
         if system_qubit_counts:  # Only plot if we have data
@@ -266,6 +333,147 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
         print(f"Plot saved to: {filepath_png}")
         
         plt.show()
+
+
+def plot_energy_density_vs_sweeps(results_dir: str = "results", 
+                                 output_dir: str = "plots/alternative_analysis",
+                                 J: float = 0.4, h: float = 0.6,
+                                 system_qubits: int = 28, bath_qubits: int = 14,
+                                 training_methods: List[str] = None,
+                                 marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                 linewidth: float = 1.5, markersize: float = 8) -> None:
+    """
+    Plot energy density above ground state vs sweeps for different training methods.
+    
+    Args:
+        results_dir: directory containing results
+        output_dir: directory to save plots
+        J: Ising coupling strength
+        h: transverse field strength
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        training_methods: list of training methods to plot
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        linewidth: line width
+        markersize: marker size
+    """
+    if training_methods is None:
+        training_methods = ['energy', 'pruning', 'random_initialization', 'reoptimize_different_states']
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Fixed parameters
+    num_sweeps = 40
+    single_qubit_noise = 0.0
+    two_qubit_noise = 0.0
+    
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    
+    print(f"Creating energy density above ground state vs sweeps plot for J={J}, h={h}, system={system_qubits}+{bath_qubits}")
+    
+    # Get ground state energy for this system size
+    gs_filename = f"ground_state_data_sys{system_qubits}_J{J}_h{h}.json"
+    gs_filepath = os.path.join(results_dir, gs_filename)
+    
+    ground_state_energy_density = None
+    if os.path.exists(gs_filepath):
+        try:
+            with open(gs_filepath, 'r') as f:
+                gs_data = json.load(f)
+            ground_state_energy_density = gs_data['ground_state_results']['ground_state_energy'] / system_qubits
+            print(f"Ground state energy density: {ground_state_energy_density:.6f}")
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"Warning: Could not process ground state file {gs_filename}: {e}")
+    else:
+        print(f"Warning: Ground state file not found: {gs_filename}")
+        return
+    
+    # Plot each training method
+    for training_method in training_methods:
+        print(f"  Processing training method: {training_method}")
+        
+        # Find file using robust filename matching
+        filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                               num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+        
+        if filepath:
+            try:
+                # Load data
+                with open(filepath, 'r') as f:
+                    data = json.load(f)
+                
+                sweeps = []
+                energy_densities = []
+                total_errors = []
+                
+                # Collect data for each sweep (0 to num_sweeps)
+                for sweep in range(num_sweeps + 1):
+                    sweep_key = f"sweep_{sweep}"
+                    if sweep_key in data['final_results']['measurements']:
+                        measurements = data['final_results']['measurements'][sweep_key]
+                        
+                        # Calculate energy density
+                        energy_density, total_err = calculate_energy_density(
+                            measurements, J, h, system_qubits
+                        )
+                        
+                        # Calculate energy density above ground state
+                        energy_density_above_gs = energy_density - ground_state_energy_density
+                        
+                        sweeps.append(sweep)
+                        energy_densities.append(energy_density_above_gs)
+                        total_errors.append(total_err)
+                        
+                        print(f"    Sweep {sweep}: energy density above GS = {energy_density_above_gs:.6f} ± {total_err:.6f}")
+                
+                if sweeps:  # Only plot if we have data
+                    print(f"    Found {len(sweeps)} data points for {training_method}")
+                    
+                    # Get color and marker for this training method
+                    color = get_training_method_color(training_method)
+                    marker = get_training_method_marker(training_method)
+                    
+                    # Plot with error bars
+                    legend_label = training_method if training_method != 'energy' else 'original'
+                    ax.errorbar(sweeps, energy_densities, yerr=total_errors,
+                               color=color, marker=marker, linewidth=linewidth, markersize=markersize,
+                               alpha=line_alpha, label=legend_label, capsize=4, capthick=linewidth)
+                else:
+                    print(f"    No sweep data found for training method: {training_method}")
+                    
+            except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+                print(f"    Warning: Could not process {os.path.basename(filepath)}: {e}")
+                continue
+        else:
+            print(f"    Warning: File not found for training method {training_method}")
+            continue
+    
+    # Customize plot
+    ax.set_xlabel('Sweep Number', fontsize=14)
+    ax.set_ylabel('Energy Density Above Ground State', fontsize=14)
+    ax.set_title(f'Energy Density Above Ground State vs Sweeps\nJ={J}, h={h}, System: {system_qubits}+{bath_qubits} qubits', fontsize=16)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=12, loc='best')
+    ax.grid(True, alpha=0.3)
+    
+    # Set x-ticks to integers
+    ax.set_xticks(range(num_sweeps + 1))
+    
+    # Save the plot
+    plt.tight_layout()
+    filename = f"energy_density_vs_sweeps_J{J}_h{h}_sys{system_qubits}"
+    filepath_pdf = os.path.join(output_dir, filename+".pdf")
+    filepath_png = os.path.join(output_dir, filename+".png")
+    plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
+    plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    
+    print(f"Plot saved to: {filepath_pdf}")
+    print(f"Plot saved to: {filepath_png}")
+    
+    plt.show()
 
 
 def plot_energy_density_vs_system_size_two_panels(results_dir: str = "results", 
@@ -371,6 +579,19 @@ def create_alternative_analysis_plots(results_dir: str = "results",
         plot_energy_density_vs_system_size(results_dir, output_dir, J, h, training_methods,
                                           marker_alpha=marker_alpha, line_alpha=line_alpha,
                                           linewidth=2, markersize=10)
+    
+    # 3. Energy density vs sweeps plots for each J,h combination (using largest system size)
+    print("\n3. Creating energy density vs sweeps plots...")
+    largest_system_size = (4, 2)  # Use the largest system size from the alternative track
+    
+    for J, h in J_h_combinations:
+        print(f"\n3. Creating energy density vs sweeps plot for J={J}, h={h}...")
+        plot_energy_density_vs_sweeps(results_dir, output_dir, J, h, 
+                                     system_qubits=largest_system_size[0], 
+                                     bath_qubits=largest_system_size[1],
+                                     training_methods=training_methods,
+                                     marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                     linewidth=2, markersize=10)
     
     print("\n" + "=" * 60)
     print("All alternative training analysis plots created successfully!")

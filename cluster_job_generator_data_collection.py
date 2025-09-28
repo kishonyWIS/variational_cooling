@@ -16,14 +16,14 @@ import numpy as np
 # Study configurations
 STUDY_CONFIGS = {
     'original': {
-        'system_sizes': [(4, 2), (8, 4), (12, 6)],  #, (16, 8), (20, 10), (24, 12), (28, 14)],
+        'system_sizes': [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)],
         'j_h_list': [(0.4, 0.6), (0.45, 0.55), (0.55, 0.45), (0.6, 0.4)],
         'noise_factors': np.linspace(0, 1, 11),
         'training_methods': ['energy'],
         'description': 'comprehensive parameter sweep'
     },
     'alternative': {
-        'system_sizes': [(16, 8), (20, 10), (24, 12), (28, 14)],
+        'system_sizes': [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)],
         'j_h_list': [(0.4, 0.6), (0.45, 0.55)],
         'noise_factors': [0.0],
         'training_methods': ["pruning", "random_initialization", "reoptimize_different_states"],
@@ -35,15 +35,16 @@ STUDY_CONFIGS = {
 BASE_SINGLE_QUBIT_NOISE = 0.001
 BASE_TWO_QUBIT_NOISE = 0.01
 P = 3
-NUM_SWEEPS = 12
+NUM_SWEEPS = 40
 INITIAL_STATE = 'zeros'
 BOND_DIMENSIONS = [32, 64]
-BASE_SHOTS = 100  # Base shots for BASE_TOTAL_SYSTEM_SIZE (28+14)
+BASE_SHOTS_LARGE = 1000  # Base shots for BASE_TOTAL_SYSTEM_SIZE (28+14)
+BASE_SHOTS_SMALL = 100  # Base shots for BASE_TOTAL_SYSTEM_SIZE (28+14)
 BASE_TOTAL_SYSTEM_SIZE = 28 + 14
 OPEN_BOUNDARY = 1
 
 # Job configuration
-WALL_TIME = "24:00"  # Match cluster setting
+WALL_TIME = "96:00"  # 4 days - extended to prevent timeouts
 MEMORY = "4GB"       # Increased for larger system sizes
 CORES = 1
 QUEUE = "berg"       # Change to berg queue for this cluster
@@ -76,7 +77,10 @@ def create_parameter_sets(study_type="original"):
                     
                     # Calculate scaling factor (larger systems get fewer shots)
                     scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
-                    num_shots = int(BASE_SHOTS * scaling_factor)
+                    if current_total <= 12+6:
+                        num_shots = int(BASE_SHOTS_LARGE * scaling_factor)
+                    else:
+                        num_shots = int(BASE_SHOTS_SMALL * scaling_factor)
                     
                     parameter_sets.append({
                         'system_qubits': system_qubits,
@@ -98,7 +102,7 @@ def create_parameter_sets(study_type="original"):
 
 
 def create_job_script(job_id, params, output_dir="jobs", 
-                     job_name="data_collection", wall_time="24:00", 
+                     job_name="data_collection", wall_time="96:00", 
                      memory="4GB", cores=1, queue="berg"):
     """
     Create a job script for a single parameter set.
@@ -171,7 +175,7 @@ echo "Job {job_id} completed at $(date)"
 
 
 def generate_jobs(parameter_sets, output_dir="jobs", 
-                 job_name="data_collection", wall_time="24:00", 
+                 job_name="data_collection", wall_time="96:00", 
                  memory="4GB", cores=1, queue="berg"):
     """
     Generate job files, one for each parameter set.
@@ -236,6 +240,30 @@ def create_submit_all_script(job_scripts, output_dir="jobs"):
     return submit_script
 
 
+def filter_incomplete_parameter_sets(parameter_sets, results_dir="results"):
+    """
+    Filter parameter sets to only include those that haven't been completed yet.
+    
+    Args:
+        parameter_sets: list of parameter dictionaries
+        results_dir: directory containing result files
+    
+    Returns:
+        list: List of parameter dictionaries that haven't been completed
+    """
+    incomplete_sets = []
+    
+    for params in parameter_sets:
+        # Generate expected filename based on parameters
+        filename = f"variational_cooling_data_sys{params['system_qubits']}_bath{params['bath_qubits']}_J{params['J']}_h{params['h']}_sweeps{params['num_sweeps']}_noise{params['single_qubit_gate_noise']}_{params['two_qubit_gate_noise']}_method{params['training_method']}.json"
+        filepath = os.path.join(results_dir, filename)
+        
+        if not os.path.exists(filepath):
+            incomplete_sets.append(params)
+    
+    return incomplete_sets
+
+
 def create_monitor_script(job_scripts, output_dir="jobs"):
     """
     Create a script to monitor job status.
@@ -279,10 +307,12 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description='Generate cluster jobs for data_collection.py')
-    parser.add_argument('--study-type', choices=['original', 'alternative'], default='alternative',
+    parser.add_argument('--study-type', choices=['original', 'alternative'], default='original',
                        help='Type of study: original (comprehensive sweep) or alternative (training methods)')
     parser.add_argument('--output-dir', default=None, help='Override output directory')
     parser.add_argument('--job-name', default=None, help='Override job name')
+    parser.add_argument('--filter-completed', default=True, action='store_true',
+                       help='Only generate jobs for parameter sets that haven\'t been completed yet')
     
     args = parser.parse_args()
     
@@ -319,6 +349,19 @@ if __name__ == "__main__":
     all_parameter_sets = create_parameter_sets(args.study_type)
     print(f"Total parameter sets: {len(all_parameter_sets)}")
     
+    # Filter out completed parameter sets if requested
+    if args.filter_completed:
+        print(f"\nFiltering out completed parameter sets...")
+        parameter_sets_to_run = filter_incomplete_parameter_sets(all_parameter_sets)
+        
+        if len(parameter_sets_to_run) == 0:
+            print("All parameter sets have been completed! No jobs to generate.")
+            sys.exit(0)
+        else:
+            print(f"Filtered to {len(parameter_sets_to_run)} incomplete parameter sets.")
+    else:
+        parameter_sets_to_run = all_parameter_sets
+    
     # Print summary of parameter combinations
     config = STUDY_CONFIGS[args.study_type]
     print(f"\n{args.study_type.title()} parameter combinations summary:")
@@ -353,15 +396,18 @@ if __name__ == "__main__":
     for sys_qubits, bath_qubits in config['system_sizes']:
         current_total = sys_qubits + bath_qubits
         scaling_factor = BASE_TOTAL_SYSTEM_SIZE / current_total
-        shots = int(BASE_SHOTS * scaling_factor)
+        if current_total <= 12+6:
+            shots = int(BASE_SHOTS_LARGE * scaling_factor)
+        else:
+            shots = int(BASE_SHOTS_SMALL * scaling_factor)
         print(f"{sys_qubits}+{bath_qubits} qubits: {shots} shots (scaling factor: {scaling_factor:.2f})")
     
     print("=" * 50)
     
     # Generate job files
-    print(f"\nGenerating job files for {len(all_parameter_sets)} parameter combinations...")
+    print(f"\nGenerating job files for {len(parameter_sets_to_run)} parameter combinations...")
     job_scripts = generate_jobs(
-        all_parameter_sets, 
+        parameter_sets_to_run, 
         output_dir=output_dir,
         job_name=job_name,
         wall_time=WALL_TIME,
@@ -387,5 +433,8 @@ if __name__ == "__main__":
         print(f"  bsub < {job_script}")
     
     print(f"\nTotal jobs created: {len(job_scripts)}")
-    print(f"Total parameter combinations: {len(all_parameter_sets)}")
+    print(f"Total parameter combinations: {len(parameter_sets_to_run)}")
+    if args.filter_completed:
+        print(f"Total original parameter sets: {len(all_parameter_sets)}")
+        print(f"Completed parameter sets: {len(all_parameter_sets) - len(parameter_sets_to_run)}")
     print("Each parameter set runs in its own job")

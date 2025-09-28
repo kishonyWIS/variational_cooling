@@ -43,6 +43,73 @@ def load_ground_state_data(filepath: str) -> Dict[str, Any]:
     return data
 
 
+def generate_variational_cooling_filename(system_qubits, bath_qubits, J, h, num_sweeps, 
+                                         single_qubit_gate_noise, two_qubit_gate_noise, 
+                                         training_method):
+    """
+    Generate consistent filename for variational cooling data files.
+    Handles floating-point precision issues by using proper formatting.
+    
+    Args:
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        J: Ising coupling strength
+        h: transverse field strength
+        num_sweeps: number of sweeps
+        single_qubit_gate_noise: single qubit gate noise level
+        two_qubit_gate_noise: two qubit gate noise level
+        training_method: training method name
+    
+    Returns:
+        str: consistent filename
+    """
+    # Format noise values to avoid floating-point precision issues
+    single_qubit_noise_str = f"{single_qubit_gate_noise:.6f}".rstrip('0').rstrip('.')
+    two_qubit_noise_str = f"{two_qubit_gate_noise:.6f}".rstrip('0').rstrip('.')
+    
+    return f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise_str}_{two_qubit_noise_str}_method{training_method}.json"
+
+
+def find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, num_sweeps, 
+                                 single_qubit_gate_noise, two_qubit_gate_noise, training_method):
+    """
+    Find variational cooling data file, handling floating-point precision issues.
+    
+    Args:
+        results_dir: directory containing results
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        J: Ising coupling strength
+        h: transverse field strength
+        num_sweeps: number of sweeps
+        single_qubit_gate_noise: single qubit gate noise level
+        two_qubit_gate_noise: two qubit gate noise level
+        training_method: training method name
+    
+    Returns:
+        str or None: filepath if found, None otherwise
+    """
+    # Generate clean filename
+    clean_filename = generate_variational_cooling_filename(
+        system_qubits, bath_qubits, J, h, num_sweeps,
+        single_qubit_gate_noise, two_qubit_gate_noise, training_method
+    )
+    
+    # Also generate the potentially problematic filename
+    problematic_filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}_method{training_method}.json"
+    
+    # Check both filenames
+    clean_filepath = os.path.join(results_dir, clean_filename)
+    problematic_filepath = os.path.join(results_dir, problematic_filename)
+    
+    if os.path.exists(clean_filepath):
+        return clean_filepath
+    elif os.path.exists(problematic_filepath):
+        return problematic_filepath
+    else:
+        return None
+
+
 def get_marker_for_jh(J, h):
     """Get consistent marker for J,h combination across all plots"""
     if (J, h) == (0.6, 0.4):
@@ -107,6 +174,7 @@ def calculate_energy_density(measurements: Dict[str, Any], J: float, h: float,
 def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results", 
                                           output_dir: str = "plots/final",
                                           J: float = 0.6, h: float = 0.4,
+                                          training_method: str = "energy",
                                           marker_alpha: float = 0.8, line_alpha: float = 0.6,
                                           linewidth: float = 1.5, markersize: float = 6,
                                           ax: Optional[plt.Axes] = None) -> None:
@@ -131,7 +199,7 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
     base_two_qubit_noise = 0.01
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     
     # Create figure if no axis provided
     if ax is None:
@@ -160,11 +228,11 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
             single_qubit_noise = base_single_qubit_noise * noise_factor
             two_qubit_noise = base_two_qubit_noise * noise_factor
             
-            # Construct filename
-            filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise}_{two_qubit_noise}.json"
-            filepath = os.path.join(results_dir, filename)
+            # Find file using robust filename matching
+            filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
             
-            if os.path.exists(filepath):
+            if filepath:
                 try:
                     # Load data
                     with open(filepath, 'r') as f:
@@ -203,7 +271,7 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
                         continue
                     
                 except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
-                    print(f"    Warning: Could not process {filename}: {e}")
+                    print(f"    Warning: Could not process {os.path.basename(filepath)}: {e}")
                     continue
         
         if two_qubit_noise_levels:  # Only plot if we have data
@@ -300,6 +368,7 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
 
 def plot_energy_density_vs_two_qubit_noise_two_panels(results_dir: str = "results", 
                                                      output_dir: str = "plots/final",
+                                                     training_method: str = "energy",
                                                      marker_alpha: float = 0.8, line_alpha: float = 0.6,
                                                      linewidth: float = 1.5, markersize: float = 6) -> None:
     """
@@ -331,7 +400,7 @@ def plot_energy_density_vs_two_qubit_noise_two_panels(results_dir: str = "result
         ax = axes[panel_idx]
         
         # Call the existing function with the specific axis
-        plot_energy_density_vs_two_qubit_noise(results_dir, output_dir, J, h,
+        plot_energy_density_vs_two_qubit_noise(results_dir, output_dir, J, h, training_method,
                                               marker_alpha, line_alpha, linewidth, markersize, ax)
         
         # Update title for each panel
@@ -367,6 +436,7 @@ def plot_energy_density_vs_two_qubit_noise_two_panels(results_dir: str = "result
 
 def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir: str = "results", 
                                                                    output_dir: str = "plots/final",
+                                                                   training_method: str = "energy",
                                                                    marker_alpha: float = 0.8, line_alpha: float = 0.6,
                                                                    linewidth: float = 1.5, markersize: float = 6) -> None:
     """
@@ -388,7 +458,7 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -400,10 +470,10 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
         # Check if we have data for ALL J,h combinations
         all_combinations_available = True
         for J, h in J_h_combinations:
-            vc_filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise}_{two_qubit_noise}.json"
-            vc_filepath = os.path.join(results_dir, vc_filename)
+            vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
             
-            if not os.path.exists(vc_filepath):
+            if not vc_filepath:
                 all_combinations_available = False
                 break
         
@@ -447,10 +517,10 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
     
     for combo_idx, (J, h) in enumerate(J_h_combinations):
         # Check if variational cooling data exists
-        vc_filename = f"variational_cooling_data_sys{largest_available_system}_bath{largest_available_bath}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise}_{two_qubit_noise}.json"
-        vc_filepath = os.path.join(results_dir, vc_filename)
+        vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
+                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
         
-        if not os.path.exists(vc_filepath):
+        if not vc_filepath:
             print(f"Warning: Variational cooling data not found for J={J}, h={h}")
             continue
         
@@ -538,6 +608,7 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
 
 def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str = "results", 
                                                               output_dir: str = "plots/final",
+                                                              training_method: str = "energy",
                                                               marker_alpha: float = 0.8, line_alpha: float = 0.6,
                                                               colorbar_orientation: str = "vertical",
                                                               linewidth: float = 1.5, markersize: float = 6) -> None:
@@ -559,7 +630,7 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
     # Fixed parameters
     J = 0.6
     h = 0.4
-    num_sweeps = 12
+    num_sweeps = 40
     
     # Define system sizes to check (largest first)
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
@@ -579,10 +650,10 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
         for noise_factor in noise_factors:
             single_qubit_noise = base_single_qubit_noise * noise_factor
             two_qubit_noise = base_two_qubit_noise * noise_factor
-            vc_filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise}_{two_qubit_noise}.json"
-            vc_filepath = os.path.join(results_dir, vc_filename)
+            vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
             
-            if os.path.exists(vc_filepath):
+            if vc_filepath:
                 has_data = True
                 break
         
@@ -638,12 +709,12 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
         single_qubit_noise = base_single_qubit_noise * noise_factor
         two_qubit_noise = base_two_qubit_noise * noise_factor
         
-        # Construct filename
-        vc_filename = f"variational_cooling_data_sys{largest_available_system}_bath{largest_available_bath}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise}_{two_qubit_noise}.json"
-        vc_filepath = os.path.join(results_dir, vc_filename)
+        # Find variational cooling data file
+        vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
+                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
         
-        if not os.path.exists(vc_filepath):
-            print(f"Warning: File not found for noise factor {noise_factor}: {vc_filename}")
+        if not vc_filepath:
+            print(f"Warning: File not found for noise factor {noise_factor}")
             continue
         
         try:
@@ -775,6 +846,7 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
 
 
 def create_final_figures(results_dir: str = "results", output_dir: str = "plots/final",
+                        training_method: str = "energy",
                         marker_alpha: float = 1., line_alpha: float = 1.) -> None:
     """
     Create all final figures for publication.
@@ -791,13 +863,13 @@ def create_final_figures(results_dir: str = "results", output_dir: str = "plots/
     
     # 1. Energy density vs two-qubit noise (two panels with shared y-axis)
     print("\n1. Creating two-panel energy density vs two-qubit noise plot...")
-    plot_energy_density_vs_two_qubit_noise_two_panels(results_dir, output_dir,
+    plot_energy_density_vs_two_qubit_noise_two_panels(results_dir, output_dir, training_method,
                                                      marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                      linewidth=4, markersize=12)
     
     # 2. Raw spin-spin correlations for different J,h at zero noise (no inset)
     print("\n2. Creating raw spin-spin correlations plot for different J,h (no inset)...")
-    plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir, output_dir,
+    plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir, output_dir, training_method,
                                                                     marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                     linewidth=1.5, markersize=10)
     
@@ -806,19 +878,19 @@ def create_final_figures(results_dir: str = "results", output_dir: str = "plots/
     
     # Create three versions with different colorbar orientations
     print("  3a. Creating version with vertical colorbar...")
-    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir,
+    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir, training_method,
                                                                marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                colorbar_orientation="vertical",
                                                                linewidth=1.5, markersize=10)
     
     print("  3b. Creating version with horizontal colorbar...")
-    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir,
+    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir, training_method,
                                                                marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                colorbar_orientation="horizontal",
                                                                linewidth=1.5, markersize=10)
     
     print("  3c. Creating version without colorbar...")
-    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir,
+    plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir, training_method,
                                                                marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                colorbar_orientation="none",
                                                                linewidth=1.5, markersize=10)
@@ -834,4 +906,4 @@ if __name__ == "__main__":
     print("=" * 50)
     
     # Create all final figures with default alpha values
-    create_final_figures(marker_alpha=1., line_alpha=1.)
+    create_final_figures(training_method="energy", marker_alpha=1., line_alpha=1.)
