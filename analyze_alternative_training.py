@@ -11,6 +11,7 @@ import os
 from typing import List, Tuple, Dict, Any, Optional
 import argparse
 from matplotlib.lines import Line2D
+from cluster_job_generator_data_collection import generate_variational_cooling_filename
 
 
 def load_variational_cooling_data(filepath: str) -> Dict[str, Any]:
@@ -43,33 +44,6 @@ def load_ground_state_data(filepath: str) -> Dict[str, Any]:
     return data
 
 
-def generate_variational_cooling_filename(system_qubits, bath_qubits, J, h, num_sweeps, 
-                                         single_qubit_gate_noise, two_qubit_gate_noise, 
-                                         training_method):
-    """
-    Generate consistent filename for variational cooling data files.
-    Handles floating-point precision issues by using proper formatting.
-    
-    Args:
-        system_qubits: number of system qubits
-        bath_qubits: number of bath qubits
-        J: Ising coupling strength
-        h: transverse field strength
-        num_sweeps: number of sweeps
-        single_qubit_gate_noise: single qubit gate noise level
-        two_qubit_gate_noise: two qubit gate noise level
-        training_method: training method name
-    
-    Returns:
-        str: consistent filename
-    """
-    # Format noise values to avoid floating-point precision issues
-    single_qubit_noise_str = f"{single_qubit_gate_noise:.6f}".rstrip('0').rstrip('.')
-    two_qubit_noise_str = f"{two_qubit_gate_noise:.6f}".rstrip('0').rstrip('.')
-    
-    return f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise_str}_{two_qubit_noise_str}_method{training_method}.json"
-
-
 def find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, num_sweeps, 
                                  single_qubit_gate_noise, two_qubit_gate_noise, training_method):
     """
@@ -89,13 +63,13 @@ def find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h,
     Returns:
         str or None: filepath if found, None otherwise
     """
-    # Generate clean filename
+    # Generate clean filename using shared function
     clean_filename = generate_variational_cooling_filename(
         system_qubits, bath_qubits, J, h, num_sweeps,
         single_qubit_gate_noise, two_qubit_gate_noise, training_method
     )
     
-    # Also generate the potentially problematic filename
+    # Also generate the potentially problematic filename (for backward compatibility)
     problematic_filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}_method{training_method}.json"
     
     # Check both filenames

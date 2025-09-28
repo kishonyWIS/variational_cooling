@@ -364,7 +364,7 @@ def plot_energy_density_vs_noise_for_different_system_sizes(results_dir: str = "
     base_two_qubit_noise = 0.01
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     
     # Create figure with two subplots
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
@@ -516,7 +516,7 @@ def plot_correlation_length_vs_noise_largest_system(results_dir: str = "results"
     h = 0.4
     system_qubits = 28
     bath_qubits = 14
-    num_sweeps = 12
+    num_sweeps = 40
     
     # Define noise levels
     noise_factors = np.linspace(0, 1, 11)
@@ -758,7 +758,7 @@ def plot_spin_spin_correlations_largest_system_zero_noise(results_dir: str = "re
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -967,7 +967,7 @@ def plot_magnetization_vs_position_different_jh_zero_noise(results_dir: str = "r
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -1102,7 +1102,7 @@ def plot_magnetization_vs_position_different_noise_fixed_jh(results_dir: str = "
     # Fixed parameters
     J = 0.6
     h = 0.4
-    num_sweeps = 12
+    num_sweeps = 40
     
     # Define system sizes to check (largest first)
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
@@ -1260,7 +1260,7 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise(results_dir: str = "
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
     
     # Fixed parameters
-    num_sweeps = 12
+    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -1479,7 +1479,7 @@ def plot_raw_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = 
     # Fixed parameters
     J = 0.6
     h = 0.4
-    num_sweeps = 12
+    num_sweeps = 40
     
     # Define system sizes to check (largest first)
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
@@ -1848,7 +1848,7 @@ if __name__ == "__main__":
             'bath_qubits': 14,
             'J': 0.6,
             'h': 0.4,
-            'num_sweeps': 12,
+            'num_sweeps': 40,
             'single_qubit_gate_noise': 0.0,
             'two_qubit_gate_noise': 0.0,
             'results_dir': 'results',

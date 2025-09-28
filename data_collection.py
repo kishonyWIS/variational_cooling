@@ -17,6 +17,7 @@ from qiskit_aer.noise import NoiseModel, depolarizing_error
 from qiskit_aer import AerSimulator
 
 from ising_ground_state_dmrg import calculate_ising_ground_state
+from cluster_job_generator_data_collection import generate_variational_cooling_filename
 
 
 def get_noisy_simulator(single_qubit_gate_noise=0.0003, two_qubit_gate_noise=0.003,
@@ -412,7 +413,10 @@ def collect_variational_cooling_data(system_qubits: int, bath_qubits: int, open_
     
     # Save data to JSON file
     timestamp = int(time.time())
-    filename = f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_gate_noise}_{two_qubit_gate_noise}_method{training_method}.json"
+    filename = generate_variational_cooling_filename(
+        system_qubits, bath_qubits, J, h, num_sweeps,
+        single_qubit_gate_noise, two_qubit_gate_noise, training_method
+    )
     filepath = os.path.join(output_dir, filename)
     
     with open(filepath, 'w') as f:

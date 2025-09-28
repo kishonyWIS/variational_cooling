@@ -240,6 +240,58 @@ def create_submit_all_script(job_scripts, output_dir="jobs"):
     return submit_script
 
 
+def normalize_float_for_filename(value, max_precision=6):
+    """
+    Normalize a float value for consistent filename representation.
+    Handles floating-point precision issues by rounding to a reasonable precision
+    and removing trailing zeros.
+    
+    Args:
+        value: float value to normalize
+        max_precision: maximum number of decimal places to consider
+    
+    Returns:
+        str: normalized string representation
+    """
+    # Round to max_precision decimal places to handle floating-point errors
+    rounded_value = round(value, max_precision)
+    
+    # Convert to string with max_precision decimal places
+    str_value = f"{rounded_value:.{max_precision}f}"
+    
+    # Remove trailing zeros and decimal point if not needed
+    str_value = str_value.rstrip('0').rstrip('.')
+    
+    return str_value
+
+
+def generate_variational_cooling_filename(system_qubits, bath_qubits, J, h, num_sweeps, 
+                                         single_qubit_gate_noise, two_qubit_gate_noise, 
+                                         training_method):
+    """
+    Generate consistent filename for variational cooling data files.
+    Handles floating-point precision issues by using proper normalization.
+    
+    Args:
+        system_qubits: number of system qubits
+        bath_qubits: number of bath qubits
+        J: Ising coupling strength
+        h: transverse field strength
+        num_sweeps: number of sweeps
+        single_qubit_gate_noise: single qubit gate noise level
+        two_qubit_gate_noise: two qubit gate noise level
+        training_method: training method name
+    
+    Returns:
+        str: consistent filename
+    """
+    # Normalize noise values to avoid floating-point precision issues
+    single_qubit_noise_str = normalize_float_for_filename(single_qubit_gate_noise)
+    two_qubit_noise_str = normalize_float_for_filename(two_qubit_gate_noise)
+    
+    return f"variational_cooling_data_sys{system_qubits}_bath{bath_qubits}_J{J}_h{h}_sweeps{num_sweeps}_noise{single_qubit_noise_str}_{two_qubit_noise_str}_method{training_method}.json"
+
+
 def filter_incomplete_parameter_sets(parameter_sets, results_dir="results"):
     """
     Filter parameter sets to only include those that haven't been completed yet.
@@ -254,8 +306,12 @@ def filter_incomplete_parameter_sets(parameter_sets, results_dir="results"):
     incomplete_sets = []
     
     for params in parameter_sets:
-        # Generate expected filename based on parameters
-        filename = f"variational_cooling_data_sys{params['system_qubits']}_bath{params['bath_qubits']}_J{params['J']}_h{params['h']}_sweeps{params['num_sweeps']}_noise{params['single_qubit_gate_noise']}_{params['two_qubit_gate_noise']}_method{params['training_method']}.json"
+        # Generate expected filename using the helper function
+        filename = generate_variational_cooling_filename(
+            params['system_qubits'], params['bath_qubits'], params['J'], params['h'],
+            params['num_sweeps'], params['single_qubit_gate_noise'], 
+            params['two_qubit_gate_noise'], params['training_method']
+        )
         filepath = os.path.join(results_dir, filename)
         
         if not os.path.exists(filepath):
