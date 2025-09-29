@@ -516,6 +516,10 @@ def compute_ground_state_observables(system_qubits: int, J: float, h: float,
             }
         }
 
+def compute_all_ground_state_observables():
+    for system_qubits in [4,8,12,16,20,24,28]:
+        for J,h in [(0.4,0.6),(0.45,0.55),(0.55,0.45),(0.6,0.4)]:
+            compute_ground_state_observables(system_qubits, J, h, output_dir="results")
 
 if __name__ == "__main__":
     import argparse

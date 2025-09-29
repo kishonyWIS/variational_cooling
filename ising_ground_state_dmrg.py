@@ -5,7 +5,7 @@ import quimb as qu
 import numpy as np
 from quimb.tensor.tensor_1d import MatrixProductState
 
-def calculate_ising_ground_state(N, J, h, bond_dim=30, max_iter=200, cyclic=False):
+def calculate_ising_ground_state(N, J, h, bond_dim=30, max_iter=200, cyclic=False, psi0=None):
     """
     Calculate the ground state energy of the transverse field Ising model.
     
@@ -44,7 +44,8 @@ def calculate_ising_ground_state(N, J, h, bond_dim=30, max_iter=200, cyclic=Fals
     # print()
     
     # Create initial random MPS
-    psi0 = qtn.MPS_rand_state(N, bond_dim=bond_dim)
+    if psi0 is None:
+        psi0 = qtn.MPS_rand_state(N, bond_dim=bond_dim)
     
     # print("Starting DMRG optimization...")
     
@@ -63,66 +64,45 @@ def calculate_ising_ground_state(N, J, h, bond_dim=30, max_iter=200, cyclic=Fals
     return ground_state_energy, ground_state_mps
 
 
-def calculate_spin_correlations(mps, max_distance=None):
+def calculate_raw_zz_correlation(mps, i, j):
     """
-    Calculate σᶻσᶻ correlations in the MPS ground state.
+    Calculate raw ZZ correlation <Z_i Z_j> (not connected correlation).
     
     Parameters:
     -----------
     mps : MatrixProductState
         The ground state MPS
-    max_distance : int, optional
-        Maximum distance to calculate correlations for (default: N//2)
+    i : int
+        First site index
+    j : int
+        Second site index
     
     Returns:
     --------
-    dict
-        Dictionary containing distances and correlation values
+    float
+        Raw correlation <Z_i Z_j>
     """
-    N = mps.nsites
-    
-    if max_distance is None:
-        max_distance = N // 2
+    from quimb.tensor.tensor_1d import expec_TN_1D
     
     # Create Z operator
     Sz = qu.pauli('Z')
     
-    # Calculate correlations from center outward
-    center = N // 2
-    correlations = []
-    distances = []
+    # Calculate raw correlation <Z_i Z_j> by computing expectation value
+    # of the product operator Z_i Z_j, similar to the correlation method
+    # but without subtracting individual terms
     
-    # Start with distance 0 (i=j=center)
-    i = center
-    j = center
+    bra = mps.H
     
-    while (i > 0) or (j < N - 1):
-        # Calculate correlation for current (i, j) pair
-        if i == j:
-            # For i == j, σz_i σz_j = I, so correlation is 1
-            corr_val = 1.0
-        else:
-            # Calculate connected correlation function using correlation method
-            corr_val = mps.correlation(Sz, i, j)
-        
-        # Calculate distance between sites
-        distance = abs(j - i)
-        
-        correlations.append(corr_val)
-        distances.append(distance)
-        
-        # Move outward: decrease i, then increase j
-        if i > 0:
-            i -= 1
-        if j < N - 1:
-            j += 1
-
-    return {
-        'distances': distances,
-        'correlations': correlations,
-        'center': center,
-        'nsites': N
-    }
+    # Apply Z operator to site i
+    pA = mps.gate(Sz, i, contract=True)
+    
+    # Apply Z operator to site j (on the already modified state)
+    pAB = pA.gate_(Sz, j, contract=True)
+    
+    # Compute expectation value <Z_i Z_j>
+    ZZ_val = expec_TN_1D(bra, pAB)
+    
+    return ZZ_val
 
 
 def calculate_zz_correlations(mps):
@@ -141,17 +121,14 @@ def calculate_zz_correlations(mps):
     """
     N = mps.nsites
     
-    # Create Z operator for correlations
-    Sz = qu.pauli('Z')
-    
     # Calculate ZZ correlations for all pairs
     ZZ_correlations = []
     ZZ_pairs = []
     
     for i in range(N):
         for j in range(i+1, N):  # Only upper triangular to avoid duplicates
-            # Calculate <Z_i Z_j> using correlation method
-            ZZ_val = mps.correlation(Sz, i, j)
+            # Calculate raw <Z_i Z_j> correlation
+            ZZ_val = calculate_raw_zz_correlation(mps, i, j)
             ZZ_correlations.append(ZZ_val)
             ZZ_pairs.append((i, j))
     
@@ -175,19 +152,7 @@ def main():
         energy, mps = calculate_ising_ground_state(N=28, J=0.45, h=0.55, bond_dim=30, max_iter=200, cyclic=False)
         print(f"Ground state energy: {energy:.8f}")
         
-        # Calculate spin correlations
-        print("\nCalculating σᶻσᶻ correlations...")
-        corr_results = calculate_spin_correlations(mps)
-        
-        print(f"System size: {corr_results['nsites']} qubits")
-        print(f"Center qubit: {corr_results['center']}")
-        print(f"Number of correlations: {len(corr_results['correlations'])}")
-        print()
-        
-        print("Distance | Correlation")
-        print("-" * 25)
-        for dist, corr in zip(corr_results['distances'], corr_results['correlations']):
-            print(f"{dist:8d} | {corr:10.6f}")
+        print("Ground state calculation completed successfully!")
 
     except Exception as e:
         print(f"Error during calculation: {e}")

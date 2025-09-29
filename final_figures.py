@@ -13,6 +13,8 @@ import argparse
 from matplotlib.lines import Line2D
 from cluster_job_generator_data_collection import generate_variational_cooling_filename
 
+MAX_NUM_SWEEPS = 40
+NUM_SWEEPS_STEADY_STATE = 40
 
 def load_variational_cooling_data(filepath: str) -> Dict[str, Any]:
     """
@@ -171,9 +173,7 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
     noise_factors = np.linspace(0, 1, 11)
     base_single_qubit_noise = 0.001
     base_two_qubit_noise = 0.01
-    
-    # Fixed parameters
-    num_sweeps = 40
+
     
     # Create figure if no axis provided
     if ax is None:
@@ -204,7 +204,7 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
             
             # Find file using robust filename matching
             filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
-                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
             
             if filepath:
                 try:
@@ -213,7 +213,7 @@ def plot_energy_density_vs_two_qubit_noise(results_dir: str = "results",
                         data = json.load(f)
                     
                     # Get measurements from final sweep
-                    final_sweep_key = f"sweep_{num_sweeps}"
+                    final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
                     measurements = data['final_results']['measurements'][final_sweep_key]
                     
                     # Calculate energy density
@@ -431,8 +431,6 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
     # Define system sizes to check (largest first)
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
     
-    # Fixed parameters
-    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -445,7 +443,7 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
         all_combinations_available = True
         for J, h in J_h_combinations:
             vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
-                                                       num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
             
             if not vc_filepath:
                 all_combinations_available = False
@@ -492,10 +490,18 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
     for combo_idx, (J, h) in enumerate(J_h_combinations):
         # Check if variational cooling data exists
         vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
-                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+        
+        # Check if ground state data exists
+        gs_filename = f"ground_state_data_sys{largest_available_system}_J{J}_h{h}.json"
+        gs_filepath = os.path.join(results_dir, gs_filename)
         
         if not vc_filepath:
             print(f"Warning: Variational cooling data not found for J={J}, h={h}")
+            continue
+        
+        if not os.path.exists(gs_filepath):
+            print(f"Warning: Ground state data not found for J={J}, h={h}")
             continue
         
         try:
@@ -503,12 +509,18 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
             with open(vc_filepath, 'r') as f:
                 vc_data = json.load(f)
             
+            # Load ground state data
+            with open(gs_filepath, 'r') as f:
+                gs_data = json.load(f)
+            
             # Get measurements from final sweep
-            final_sweep_key = f"sweep_{num_sweeps}"
+            final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
             vc_measurements = vc_data['final_results']['measurements'][final_sweep_key]
+            gs_obs = gs_data['ground_state_results']['observables']
             
             # Calculate raw correlations (without subtracting individual expectations)
             raw_correlations = []
+            gs_correlations = []
             valid_distances = []
             total_errors = []
             
@@ -522,12 +534,19 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
                 raw_correlations.append(zz_data['mean'])
                 valid_distances.append(j - i)
                 total_errors.append(zz_data['total_error'])
+                
+                # Get ground state correlation
+                if zz_label in gs_obs:
+                    gs_corr = gs_obs[zz_label]['value']
+                    gs_correlations.append(gs_corr)
+                else:
+                    gs_correlations.append(0.0)
             
             if len(raw_correlations) > 0:
                 color = colors[combo_idx]
                 marker = get_marker_for_jh(J, h)
                 
-                # Plot raw correlations with error bars
+                # Plot variational cooling raw correlations with error bars
                 ax.plot(valid_distances, raw_correlations, 
                        color=color, marker=marker, linewidth=linewidth, 
                        markersize=markersize, alpha=line_alpha, label=f'J={J}, h={h}')
@@ -537,6 +556,11 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
                            yerr=total_errors, fmt='none', 
                            capsize=4, capthick=linewidth, ecolor=color, 
                            elinewidth=linewidth, alpha=marker_alpha)
+                
+                # Plot ground state correlations with dashed lines (no label to avoid automatic legend entry)
+                ax.plot(valid_distances, gs_correlations, 
+                        linestyle='-', linewidth=linewidth, 
+                        alpha=line_alpha * 0.3, markersize=markersize, marker=marker, color='b')
                 
                 print(f"  J={J}, h={h}: {len(raw_correlations)} data points")
             else:
@@ -551,7 +575,33 @@ def plot_raw_spin_spin_correlations_different_jh_zero_noise_no_inset(results_dir
     ax.set_ylabel('$\langle \sigma^Z_i \sigma^Z_j \\rangle$', fontsize=14)
     ax.set_title(f'Raw Spin-Spin Correlations vs Distance\nSystem: {largest_available_system}+{largest_available_bath} qubits, Zero Noise', fontsize=16)
     ax.grid(False) # ax.grid(True, alpha=0.3)
-    ax.legend(fontsize=12, loc='upper right')
+    
+    # Create custom legend with proper styling
+    from matplotlib.lines import Line2D
+    
+    # Get existing legend handles and labels from the plotted data
+    existing_handles, existing_labels = ax.get_legend_handles_labels()
+    
+    # Create custom legend handles
+    legend_handles = []
+    legend_labels = []
+    
+    # Add a "Steady State" entry with no marker (using the color from the first data series)
+    if existing_handles:
+        # Use the color from the first steady state line
+        steady_state_color = existing_handles[0].get_color()
+        legend_handles.append(Line2D([0], [0], color=steady_state_color, linestyle='-', linewidth=linewidth, marker=''))
+        legend_labels.append('Steady State')
+    
+    # Add a "Ground State" entry with dashed line and no marker
+    legend_handles.append(Line2D([0], [0], color='b', linestyle='-', linewidth=linewidth, marker=''))
+    legend_labels.append('Ground State')
+    
+    # Add the individual J,h combination entries
+    legend_handles.extend(existing_handles)
+    legend_labels.extend(existing_labels)
+    
+    ax.legend(handles=legend_handles, labels=legend_labels, fontsize=12, loc='upper right')
     
     # Set x-ticks to integers
     ax.set_xticks(distances)
@@ -585,7 +635,8 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
                                                               training_method: str = "energy",
                                                               marker_alpha: float = 0.8, line_alpha: float = 0.6,
                                                               colorbar_orientation: str = "vertical",
-                                                              linewidth: float = 1.5, markersize: float = 6) -> None:
+                                                              linewidth: float = 1.5, markersize: float = 6,
+                                                              show_plateau_lines: bool = True, show_inset: bool = True) -> None:
     """
     Plot raw spin-spin correlations <sigma^Z_i sigma^Z_j> vs distance for different noise levels at fixed J=0.6, h=0.4.
     Uses the largest available system size. Does NOT subtract individual expectations.
@@ -597,15 +648,17 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
         marker_alpha: alpha value for markers
         line_alpha: alpha value for lines
         colorbar_orientation: orientation of colorbar ("vertical", "horizontal", or "none")
+        linewidth: line width
+        markersize: marker size
+        show_plateau_lines: whether to show horizontal lines at plateau values
+        show_inset: whether to show the plateau vs noise inset plot
     """
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
     # Fixed parameters
     J = 0.6
-    h = 0.4
-    num_sweeps = 40
-    
+    h = 0.4    
     # Define system sizes to check (largest first)
     system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
     
@@ -625,7 +678,7 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
             single_qubit_noise = base_single_qubit_noise * noise_factor
             two_qubit_noise = base_two_qubit_noise * noise_factor
             vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
-                                                       num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
             
             if vc_filepath:
                 has_data = True
@@ -685,7 +738,7 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
         
         # Find variational cooling data file
         vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
-                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
         
         if not vc_filepath:
             print(f"Warning: File not found for noise factor {noise_factor}")
@@ -697,7 +750,7 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
                 vc_data = json.load(f)
             
             # Get measurements from final sweep
-            final_sweep_key = f"sweep_{num_sweeps}"
+            final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
             vc_measurements = vc_data['final_results']['measurements'][final_sweep_key]
             
             # Calculate raw correlations (without subtracting individual expectations)
@@ -741,8 +794,9 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
                     plateau_values.append(plateau_value)
                     noise_levels_for_plateau.append(noise_factor)
                     
-                    # Add horizontal dotted line at plateau value
-                    ax.axhline(y=plateau_value, color=color, linestyle=':', alpha=0.5, linewidth=1)
+                    # Add horizontal dotted line at plateau value (if enabled)
+                    if show_plateau_lines:
+                        ax.axhline(y=plateau_value, color=color, linestyle=':', alpha=0.5, linewidth=1)
                     
                     print(f"  Noise {noise_factor:.1f}: {len(raw_correlations)} data points, plateau value = {plateau_value:.4f} (distances {plateau_distances})")
                 else:
@@ -788,8 +842,8 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
         cbar.set_label('Two-Qubit Gate Error Rate', fontsize=12)
         cbar.set_ticks(np.linspace(0, 0.01, 6))  # Show 6 ticks from 0 to 0.01
     
-    # Create inset for plateau values vs noise
-    if len(plateau_values) > 1:
+    # Create inset for plateau values vs noise (if enabled)
+    if show_inset and len(plateau_values) > 1:
         # Create inset in the upper right corner
         axins = ax.inset_axes([0.6, 0.6, 0.35, 0.35])
         
@@ -816,6 +870,691 @@ def plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir: str
     filepath_png = os.path.join(output_dir, filename+".png")
     plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
     plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    plt.show()
+
+
+def plot_magnetization_vs_position_different_jh_zero_noise(results_dir: str = "results", 
+                                                          output_dir: str = "plots/final",
+                                                          training_method: str = "energy",
+                                                          marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                          linewidth: float = 1.5, markersize: float = 6) -> None:
+    """
+    Plot magnetization <sigma^Z_i> vs position i for different J,h combinations at zero noise.
+    Uses the largest available system size.
+    
+    Args:
+        results_dir: directory containing results
+        output_dir: directory to save plots
+        training_method: training method name
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        linewidth: line width
+        markersize: marker size
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Define J,h combinations to plot
+    J_h_combinations = [(0.6, 0.4), (0.55, 0.45), (0.45, 0.55), (0.4, 0.6)]
+    
+    # Define system sizes to check (largest first)
+    system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
+    
+    single_qubit_noise = 0.0
+    two_qubit_noise = 0.0
+    
+    # Find the largest available system size with zero noise data
+    largest_available_system = None
+    largest_available_bath = None
+    
+    for system_qubits, bath_qubits in system_sizes:
+        # Check if we have data for ALL J,h combinations
+        all_combinations_available = True
+        for J, h in J_h_combinations:
+            vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+            
+            if not vc_filepath:
+                all_combinations_available = False
+                break
+        
+        if all_combinations_available:
+            largest_available_system = system_qubits
+            largest_available_bath = bath_qubits
+            break
+    
+    if largest_available_system is None:
+        print("No zero noise data found for any system size!")
+        return
+    
+    print(f"Using largest available system size: {largest_available_system}+{largest_available_bath} qubits")
+    
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Use viridis colormap for consistent coloring (all at zero noise = 0.0)
+    colors = [plt.cm.viridis(0.0) for _ in J_h_combinations]  # All same color since noise = 0
+    
+    for combo_idx, (J, h) in enumerate(J_h_combinations):
+        # Check if variational cooling data exists
+        vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+        
+        if not vc_filepath:
+            print(f"Warning: Variational cooling data not found for J={J}, h={h}")
+            continue
+        
+        try:
+            # Load variational cooling data
+            with open(vc_filepath, 'r') as f:
+                vc_data = json.load(f)
+            
+            # Get measurements from final sweep
+            final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
+            vc_measurements = vc_data['final_results']['measurements'][final_sweep_key]
+            
+            # Extract magnetization data
+            positions = []
+            magnetizations = []
+            total_errors = []
+            
+            for i in range(largest_available_system):
+                z_label = f"Z_{i}"
+                if z_label in vc_measurements:
+                    z_data = vc_measurements[z_label]
+                    positions.append(i)
+                    magnetizations.append(z_data['mean'])
+                    total_errors.append(z_data['total_error'])
+            
+            if len(magnetizations) > 0:
+                color = colors[combo_idx]
+                marker = get_marker_for_jh(J, h)
+                
+                # Plot magnetization with error bars
+                ax.plot(positions, magnetizations, 'o-', 
+                       color=color, marker=marker, linewidth=linewidth, markersize=markersize, 
+                       alpha=line_alpha, label=f'J={J}, h={h}')
+                
+                # Add error bars
+                ax.errorbar(positions, magnetizations, 
+                           yerr=total_errors, fmt='none', 
+                           capsize=4, capthick=linewidth, ecolor=color, 
+                           elinewidth=linewidth, alpha=marker_alpha)
+                
+                print(f"  J={J}, h={h}: {len(magnetizations)} data points")
+            else:
+                print(f"  J={J}, h={h}: No magnetization data found")
+                
+        except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+            print(f"Warning: Could not process data for J={J}, h={h}: {e}")
+            continue
+    
+    # Customize plot
+    ax.set_xlabel('Position i', fontsize=14)
+    ax.set_ylabel('$\langle \sigma^Z_i \\rangle$', fontsize=14)
+    ax.set_title(f'Magnetization vs Position\nSystem: {largest_available_system}+{largest_available_bath} qubits, Zero Noise', fontsize=16)
+    ax.grid(False)
+    ax.legend(fontsize=12, loc='upper right')
+    
+    # Set x-ticks to integers
+    ax.set_xticks(range(largest_available_system))
+    
+    # Save the plot
+    filename = f"magnetization_vs_position_different_jh_zero_noise_sys{largest_available_system}"
+    filepath_pdf = os.path.join(output_dir, filename+".pdf")
+    filepath_png = os.path.join(output_dir, filename+".png")
+    plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
+    plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    print(f"Magnetization plot saved to: {filepath_pdf}")
+    print(f"Magnetization plot saved to: {filepath_png}")
+    
+    plt.show()
+
+
+def plot_connected_spin_spin_correlations_different_jh_zero_noise(results_dir: str = "results", 
+                                                                  output_dir: str = "plots/final",
+                                                                  training_method: str = "energy",
+                                                                  marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                                  linewidth: float = 1.5, markersize: float = 6) -> None:
+    """
+    Plot connected spin-spin correlations <sigma^Z_i sigma^Z_j> - <sigma^Z_i><sigma^Z_j> vs distance 
+    for different J,h combinations at zero noise. Uses the largest available system size.
+    
+    Args:
+        results_dir: directory containing results
+        output_dir: directory to save plots
+        training_method: training method name
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        linewidth: line width
+        markersize: marker size
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Define J,h combinations to plot
+    J_h_combinations = [(0.6, 0.4), (0.55, 0.45), (0.45, 0.55), (0.4, 0.6)]
+    
+    # Define system sizes to check (largest first)
+    system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
+    
+    single_qubit_noise = 0.0
+    two_qubit_noise = 0.0
+    
+    # Find the largest available system size with zero noise data
+    largest_available_system = None
+    largest_available_bath = None
+    
+    for system_qubits, bath_qubits in system_sizes:
+        # Check if we have data for ALL J,h combinations
+        all_combinations_available = True
+        for J, h in J_h_combinations:
+            vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+            
+            if not vc_filepath:
+                all_combinations_available = False
+                break
+        
+        if all_combinations_available:
+            largest_available_system = system_qubits
+            largest_available_bath = bath_qubits
+            break
+    
+    if largest_available_system is None:
+        print("No zero noise data found for any system size!")
+        return
+    
+    print(f"Using largest available system size: {largest_available_system}+{largest_available_bath} qubits")
+    
+    # Generate site pairs using the alternating center-outward pattern
+    site_pairs = []
+    center = largest_available_system // 2
+    i, j = center, center
+    
+    while (i > 0) or (j < largest_available_system - 1):
+        # Try to decrease i
+        if i > 0:
+            i -= 1
+            if i < j:  # Only add if i < j to avoid duplicates
+                site_pairs.append((i, j))
+        
+        # Try to increase j
+        if j < largest_available_system - 1:
+            j += 1
+            if i < j:  # Only add if i < j to avoid duplicates
+                site_pairs.append((i, j))
+    
+    # Calculate distances
+    distances = [j - i for i, j in site_pairs]
+    
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Use viridis colormap for consistent coloring (all at zero noise = 0.0)
+    colors = [plt.cm.viridis(0.0) for _ in J_h_combinations]  # All same color since noise = 0
+    
+    for combo_idx, (J, h) in enumerate(J_h_combinations):
+        # Check if variational cooling data exists
+        vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+        
+        if not vc_filepath:
+            print(f"Warning: Variational cooling data not found for J={J}, h={h}")
+            continue
+        
+        try:
+            # Load variational cooling data
+            with open(vc_filepath, 'r') as f:
+                vc_data = json.load(f)
+            
+            # Get measurements from final sweep
+            final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
+            vc_measurements = vc_data['final_results']['measurements'][final_sweep_key]
+            
+            # Calculate connected correlations
+            connected_correlations = []
+            valid_distances = []
+            total_errors = []
+            
+            for i, j in site_pairs:
+                # Get ZZ correlation
+                zz_label = f"ZZ_{i}_{j}"
+                z_i_label = f"Z_{i}"
+                z_j_label = f"Z_{j}"
+                
+                if zz_label not in vc_measurements or z_i_label not in vc_measurements or z_j_label not in vc_measurements:
+                    continue
+                
+                zz_data = vc_measurements[zz_label]
+                z_i_data = vc_measurements[z_i_label]
+                z_j_data = vc_measurements[z_j_label]
+                
+                # Calculate connected correlation: <ZZ> - <Z_i><Z_j>
+                zz_expect = zz_data['mean']
+                z_i_expect = z_i_data['mean']
+                z_j_expect = z_j_data['mean']
+                
+                connected_corr = zz_expect - z_i_expect * z_j_expect
+                connected_correlations.append(connected_corr)
+                valid_distances.append(j - i)
+                
+                # Error propagation for connected correlation
+                # ∂(ZZ - Z_i * Z_j)/∂ZZ = 1, ∂(ZZ - Z_i * Z_j)/∂Z_i = -Z_j, ∂(ZZ - Z_i * Z_j)/∂Z_j = -Z_i
+                zz_err = zz_data['total_error']
+                z_i_err = z_i_data['total_error']
+                z_j_err = z_j_data['total_error']
+                
+                total_err = np.sqrt(
+                    zz_err**2 + 
+                    (z_j_expect * z_i_err)**2 + 
+                    (z_i_expect * z_j_err)**2
+                )
+                total_errors.append(total_err)
+            
+            if len(connected_correlations) > 0:
+                color = colors[combo_idx]
+                marker = get_marker_for_jh(J, h)
+                
+                # Plot connected correlations with error bars
+                ax.plot(valid_distances, connected_correlations, 
+                       color=color, marker=marker, linewidth=linewidth, 
+                       markersize=markersize, alpha=line_alpha, label=f'J={J}, h={h}')
+                
+                # Add error bars with matching colors
+                ax.errorbar(valid_distances, connected_correlations, 
+                           yerr=total_errors, fmt='none', 
+                           capsize=4, capthick=linewidth, ecolor=color, 
+                           elinewidth=linewidth, alpha=marker_alpha)
+                
+                print(f"  J={J}, h={h}: {len(connected_correlations)} data points")
+            else:
+                print(f"  J={J}, h={h}: No connected correlation data found")
+                
+        except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+            print(f"Warning: Could not process data for J={J}, h={h}: {e}")
+            continue
+    
+    # Customize plot
+    ax.set_xlabel('Distance |i-j|', fontsize=14)
+    ax.set_ylabel('$\langle \sigma^Z_i \sigma^Z_j \\rangle - \langle \sigma^Z_i \\rangle \langle \sigma^Z_j \\rangle$', fontsize=14)
+    ax.set_title(f'Connected Spin-Spin Correlations vs Distance\nSystem: {largest_available_system}+{largest_available_bath} qubits, Zero Noise', fontsize=16)
+    ax.grid(False)
+    ax.legend(fontsize=12, loc='upper right')
+    
+    # Set x-ticks to integers
+    ax.set_xticks(distances)
+    
+    # Save the plot
+    filename = f"connected_spin_spin_correlations_different_jh_zero_noise_sys{largest_available_system}"
+    filepath_pdf = os.path.join(output_dir, filename+".pdf")
+    filepath_png = os.path.join(output_dir, filename+".png")
+    plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
+    plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    print(f"Connected correlations plot saved to: {filepath_pdf}")
+    print(f"Connected correlations plot saved to: {filepath_png}")
+    
+    plt.show()
+
+
+def plot_magnetization_vs_position_different_noise_fixed_jh(results_dir: str = "results", 
+                                                           output_dir: str = "plots/final",
+                                                           J: float = 0.6, h: float = 0.4,
+                                                           training_method: str = "energy",
+                                                           marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                           linewidth: float = 1.5, markersize: float = 6) -> None:
+    """
+    Plot magnetization <sigma^Z_i> vs position i for different noise levels at fixed J=0.6, h=0.4.
+    Uses the largest available system size.
+    
+    Args:
+        results_dir: directory containing results
+        output_dir: directory to save plots
+        J: Ising coupling strength
+        h: transverse field strength
+        training_method: training method name
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        linewidth: line width
+        markersize: marker size
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Define system sizes to check (largest first)
+    system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
+    
+    # Define noise levels
+    noise_factors = np.linspace(0, 1, 11)
+    base_single_qubit_noise = 0.001
+    base_two_qubit_noise = 0.01
+    
+    # Find the largest available system size
+    largest_available_system = None
+    largest_available_bath = None
+    
+    for system_qubits, bath_qubits in system_sizes:
+        # Check if we have data for at least one noise level
+        has_data = False
+        for noise_factor in noise_factors:
+            single_qubit_noise = base_single_qubit_noise * noise_factor
+            two_qubit_noise = base_two_qubit_noise * noise_factor
+            vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+            
+            if vc_filepath:
+                has_data = True
+                break
+        
+        if has_data:
+            largest_available_system = system_qubits
+            largest_available_bath = bath_qubits
+            break
+    
+    if largest_available_system is None:
+        print("No data found for any system size!")
+        return
+    
+    print(f"Using largest available system size: {largest_available_system}+{largest_available_bath} qubits")
+    
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Colors for different noise levels
+    colors = plt.cm.viridis(np.linspace(0, 1, len(noise_factors)))
+    
+    # Get marker for this J,h combination
+    marker = get_marker_for_jh(J, h)
+    
+    print(f"Analyzing magnetization vs position for different noise levels")
+    print(f"System: {largest_available_system}+{largest_available_bath} qubits, J={J}, h={h}")
+    
+    for noise_idx, noise_factor in enumerate(noise_factors):
+        single_qubit_noise = base_single_qubit_noise * noise_factor
+        two_qubit_noise = base_two_qubit_noise * noise_factor
+        
+        # Find variational cooling data file
+        vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+        
+        if not vc_filepath:
+            print(f"Warning: File not found for noise factor {noise_factor}")
+            continue
+        
+        try:
+            # Load data
+            with open(vc_filepath, 'r') as f:
+                vc_data = json.load(f)
+            
+            # Get measurements from final sweep
+            final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
+            vc_measurements = vc_data['final_results']['measurements'][final_sweep_key]
+            
+            # Extract magnetization data
+            positions = []
+            magnetizations = []
+            total_errors = []
+            
+            for i in range(largest_available_system):
+                z_label = f"Z_{i}"
+                if z_label in vc_measurements:
+                    z_data = vc_measurements[z_label]
+                    positions.append(i)
+                    magnetizations.append(z_data['mean'])
+                    total_errors.append(z_data['total_error'])
+            
+            if len(magnetizations) > 0:
+                color = colors[noise_idx]
+                
+                # Plot magnetization with error bars using consistent marker
+                ax.plot(positions, magnetizations, 
+                       color=color, marker=marker, linewidth=linewidth, markersize=markersize, 
+                       alpha=line_alpha, label=f'Noise {noise_factor:.1f}')
+                
+                # Add error bars with matching colors
+                ax.errorbar(positions, magnetizations, 
+                           yerr=total_errors, fmt='none', 
+                           capsize=4, capthick=linewidth, ecolor=color, 
+                           elinewidth=linewidth, alpha=marker_alpha)
+                
+                print(f"  Noise {noise_factor:.1f}: {len(magnetizations)} data points")
+            else:
+                print(f"  Noise {noise_factor:.1f}: No magnetization data found")
+                
+        except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+            print(f"Warning: Could not process data for noise factor {noise_factor}: {e}")
+            continue
+    
+    # Customize plot
+    ax.set_xlabel('Position i', fontsize=14)
+    ax.set_ylabel('$\langle \sigma^Z_i \\rangle$', fontsize=14)
+    ax.set_title(f'Magnetization vs Position for Different Noise Levels\nSystem: {largest_available_system}+{largest_available_bath} qubits, J={J}, h={h}', fontsize=16)
+    ax.grid(False)
+    
+    # Set x-ticks to integers
+    ax.set_xticks(range(largest_available_system))
+    
+    # Add colorbar for two-qubit gate error rate
+    norm = plt.Normalize(0, 0.01)
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, shrink=0.8, aspect=30)
+    cbar.set_label('Two-Qubit Gate Error Rate', fontsize=12)
+    cbar.set_ticks(np.linspace(0, 0.01, 6))  # Show 6 ticks from 0 to 0.01
+    
+    # Save the plot
+    filename = f"magnetization_vs_position_different_noise_J{J}_h{h}_sys{largest_available_system}"
+    filepath_pdf = os.path.join(output_dir, filename+".pdf")
+    filepath_png = os.path.join(output_dir, filename+".png")
+    plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
+    plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    print(f"Magnetization plot saved to: {filepath_pdf}")
+    print(f"Magnetization plot saved to: {filepath_png}")
+    
+    plt.show()
+
+
+def plot_connected_spin_spin_correlations_different_noise_fixed_jh(results_dir: str = "results", 
+                                                                   output_dir: str = "plots/final",
+                                                                   J: float = 0.6, h: float = 0.4,
+                                                                   training_method: str = "energy",
+                                                                   marker_alpha: float = 0.8, line_alpha: float = 0.6,
+                                                                   linewidth: float = 1.5, markersize: float = 6) -> None:
+    """
+    Plot connected spin-spin correlations <sigma^Z_i sigma^Z_j> - <sigma^Z_i><sigma^Z_j> vs distance 
+    for different noise levels at fixed J=0.6, h=0.4. Uses the largest available system size.
+    
+    Args:
+        results_dir: directory containing results
+        output_dir: directory to save plots
+        J: Ising coupling strength
+        h: transverse field strength
+        training_method: training method name
+        marker_alpha: alpha value for markers
+        line_alpha: alpha value for lines
+        linewidth: line width
+        markersize: marker size
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Define system sizes to check (largest first)
+    system_sizes = [(28, 14), (24, 12), (20, 10), (16, 8), (12, 6), (8, 4), (4, 2)]
+    
+    # Define noise levels
+    noise_factors = np.linspace(0, 1, 11)
+    base_single_qubit_noise = 0.001
+    base_two_qubit_noise = 0.01
+    
+    # Find the largest available system size
+    largest_available_system = None
+    largest_available_bath = None
+    
+    for system_qubits, bath_qubits in system_sizes:
+        # Check if we have data for at least one noise level
+        has_data = False
+        for noise_factor in noise_factors:
+            single_qubit_noise = base_single_qubit_noise * noise_factor
+            two_qubit_noise = base_two_qubit_noise * noise_factor
+            vc_filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+            
+            if vc_filepath:
+                has_data = True
+                break
+        
+        if has_data:
+            largest_available_system = system_qubits
+            largest_available_bath = bath_qubits
+            break
+    
+    if largest_available_system is None:
+        print("No data found for any system size!")
+        return
+    
+    print(f"Using largest available system size: {largest_available_system}+{largest_available_bath} qubits")
+    
+    # Generate site pairs using the alternating center-outward pattern
+    site_pairs = []
+    center = largest_available_system // 2
+    i, j = center, center
+    
+    while (i > 0) or (j < largest_available_system - 1):
+        # Try to decrease i
+        if i > 0:
+            i -= 1
+            if i < j:  # Only add if i < j to avoid duplicates
+                site_pairs.append((i, j))
+        
+        # Try to increase j
+        if j < largest_available_system - 1:
+            j += 1
+            if i < j:  # Only add if i < j to avoid duplicates
+                site_pairs.append((i, j))
+    
+    # Calculate distances
+    distances = [j - i for i, j in site_pairs]
+    
+    # Create figure
+    fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+    
+    # Colors for different noise levels
+    colors = plt.cm.viridis(np.linspace(0, 1, len(noise_factors)))
+    
+    # Get marker for this J,h combination
+    marker = get_marker_for_jh(J, h)
+    
+    print(f"Analyzing connected spin-spin correlations vs distance for different noise levels")
+    print(f"System: {largest_available_system}+{largest_available_bath} qubits, J={J}, h={h}")
+    
+    for noise_idx, noise_factor in enumerate(noise_factors):
+        single_qubit_noise = base_single_qubit_noise * noise_factor
+        two_qubit_noise = base_two_qubit_noise * noise_factor
+        
+        # Find variational cooling data file
+        vc_filepath = find_variational_cooling_file(results_dir, largest_available_system, largest_available_bath, J, h, 
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+        
+        if not vc_filepath:
+            print(f"Warning: File not found for noise factor {noise_factor}")
+            continue
+        
+        try:
+            # Load data
+            with open(vc_filepath, 'r') as f:
+                vc_data = json.load(f)
+            
+            # Get measurements from final sweep
+            final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
+            vc_measurements = vc_data['final_results']['measurements'][final_sweep_key]
+            
+            # Calculate connected correlations
+            connected_correlations = []
+            valid_distances = []
+            total_errors = []
+            
+            for i, j in site_pairs:
+                # Get ZZ correlation and individual Z expectations
+                zz_label = f"ZZ_{i}_{j}"
+                z_i_label = f"Z_{i}"
+                z_j_label = f"Z_{j}"
+                
+                if zz_label not in vc_measurements or z_i_label not in vc_measurements or z_j_label not in vc_measurements:
+                    continue
+                
+                zz_data = vc_measurements[zz_label]
+                z_i_data = vc_measurements[z_i_label]
+                z_j_data = vc_measurements[z_j_label]
+                
+                # Calculate connected correlation: <ZZ> - <Z_i><Z_j>
+                zz_expect = zz_data['mean']
+                z_i_expect = z_i_data['mean']
+                z_j_expect = z_j_data['mean']
+                
+                connected_corr = zz_expect - z_i_expect * z_j_expect
+                connected_correlations.append(connected_corr)
+                valid_distances.append(j - i)
+                
+                # Error propagation for connected correlation
+                zz_err = zz_data['total_error']
+                z_i_err = z_i_data['total_error']
+                z_j_err = z_j_data['total_error']
+                
+                total_err = np.sqrt(
+                    zz_err**2 + 
+                    (z_j_expect * z_i_err)**2 + 
+                    (z_i_expect * z_j_err)**2
+                )
+                total_errors.append(total_err)
+            
+            if len(connected_correlations) > 0:
+                color = colors[noise_idx]
+                
+                # Plot connected correlations with error bars using consistent marker
+                ax.plot(valid_distances, connected_correlations, 
+                       color=color, marker=marker, linewidth=linewidth, markersize=markersize, 
+                       alpha=line_alpha, label=f'Noise {noise_factor:.1f}')
+                
+                # Add error bars with matching colors
+                ax.errorbar(valid_distances, connected_correlations, 
+                           yerr=total_errors, fmt='none', 
+                           capsize=4, capthick=linewidth, ecolor=color, 
+                           elinewidth=linewidth, alpha=marker_alpha)
+                
+                print(f"  Noise {noise_factor:.1f}: {len(connected_correlations)} data points")
+            else:
+                print(f"  Noise {noise_factor:.1f}: No connected correlation data found")
+                
+        except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+            print(f"Warning: Could not process data for noise factor {noise_factor}: {e}")
+            continue
+    
+    # Customize plot
+    ax.set_xlabel('Distance |i-j|', fontsize=14)
+    ax.set_ylabel('$\langle \sigma^Z_i \sigma^Z_j \\rangle - \langle \sigma^Z_i \\rangle \langle \sigma^Z_j \\rangle$', fontsize=14)
+    ax.set_title(f'Connected Spin-Spin Correlations vs Distance for Different Noise Levels\nSystem: {largest_available_system}+{largest_available_bath} qubits, J={J}, h={h}', fontsize=16)
+    ax.grid(False)
+    
+    # Set x-ticks to integers
+    ax.set_xticks(distances)
+    
+    # Add colorbar for two-qubit gate error rate
+    norm = plt.Normalize(0, 0.01)
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=norm)
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, shrink=0.8, aspect=30)
+    cbar.set_label('Two-Qubit Gate Error Rate', fontsize=12)
+    cbar.set_ticks(np.linspace(0, 0.01, 6))  # Show 6 ticks from 0 to 0.01
+    
+    # Save the plot
+    filename = f"connected_spin_spin_correlations_different_noise_J{J}_h{h}_sys{largest_available_system}"
+    filepath_pdf = os.path.join(output_dir, filename+".pdf")
+    filepath_png = os.path.join(output_dir, filename+".png")
+    plt.savefig(filepath_pdf, dpi=300, bbox_inches='tight')
+    plt.savefig(filepath_png, dpi=300, bbox_inches='tight')
+    print(f"Connected correlations plot saved to: {filepath_pdf}")
+    print(f"Connected correlations plot saved to: {filepath_png}")
+    
     plt.show()
 
 
@@ -855,19 +1594,48 @@ def create_final_figures(results_dir: str = "results", output_dir: str = "plots/
     plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir, training_method,
                                                                marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                colorbar_orientation="vertical",
-                                                               linewidth=1.5, markersize=10)
+                                                               linewidth=1.5, markersize=10, 
+                                                               show_plateau_lines=False, show_inset=False)
     
     print("  3b. Creating version with horizontal colorbar...")
     plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir, training_method,
                                                                marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                colorbar_orientation="horizontal",
-                                                               linewidth=1.5, markersize=10)
+                                                               linewidth=1.5, markersize=10,
+                                                               show_plateau_lines=False, show_inset=False)
     
     print("  3c. Creating version without colorbar...")
     plot_raw_spin_spin_correlations_different_noise_no_red_line(results_dir, output_dir, training_method,
                                                                marker_alpha=marker_alpha, line_alpha=line_alpha,
                                                                colorbar_orientation="none",
-                                                               linewidth=1.5, markersize=10)
+                                                               linewidth=1.5, markersize=10,
+                                                               show_plateau_lines=False, show_inset=False)
+    
+    # 4. Magnetization vs position for different J,h at zero noise
+    print("\n4. Creating magnetization vs position plot for different J,h (zero noise)...")
+    plot_magnetization_vs_position_different_jh_zero_noise(results_dir, output_dir, training_method,
+                                                           marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                           linewidth=1.5, markersize=10)
+    
+    # 5. Connected spin-spin correlations for different J,h at zero noise
+    print("\n5. Creating connected spin-spin correlations plot for different J,h (zero noise)...")
+    plot_connected_spin_spin_correlations_different_jh_zero_noise(results_dir, output_dir, training_method,
+                                                                 marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                                 linewidth=1.5, markersize=10)
+    
+    # 6. Magnetization vs position for different noise levels at fixed J=0.6, h=0.4
+    print("\n6. Creating magnetization vs position plot for different noise levels...")
+    plot_magnetization_vs_position_different_noise_fixed_jh(results_dir, output_dir, 
+                                                           J=0.6, h=0.4, training_method=training_method,
+                                                           marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                           linewidth=1.5, markersize=10)
+    
+    # 7. Connected spin-spin correlations for different noise levels at fixed J=0.6, h=0.4
+    print("\n7. Creating connected spin-spin correlations plot for different noise levels...")
+    plot_connected_spin_spin_correlations_different_noise_fixed_jh(results_dir, output_dir, 
+                                                                  J=0.6, h=0.4, training_method=training_method,
+                                                                  marker_alpha=marker_alpha, line_alpha=line_alpha,
+                                                                  linewidth=1.5, markersize=10)
     
     print("\n" + "=" * 50)
     print("All final figures created successfully!")

@@ -14,6 +14,10 @@ from matplotlib.lines import Line2D
 from cluster_job_generator_data_collection import generate_variational_cooling_filename
 
 
+NUM_SWEEPS_STEADY_STATE = 40
+MAX_NUM_SWEEPS = 40
+
+
 def load_variational_cooling_data(filepath: str) -> Dict[str, Any]:
     """
     Load variational cooling data from JSON file.
@@ -183,8 +187,6 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
     # Define system sizes to check (from cluster_job_generator_data_collection.py)
     system_sizes = [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)]
     
-    # Fixed parameters
-    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -210,7 +212,7 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
         for system_qubits, bath_qubits in system_sizes:
             # Find file using robust filename matching
             filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
-                                                   num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                                   MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
             
             if filepath:
                 try:
@@ -219,7 +221,7 @@ def plot_energy_density_vs_system_size(results_dir: str = "results",
                         data = json.load(f)
                     
                     # Get measurements from final sweep
-                    final_sweep_key = f"sweep_{num_sweeps}"
+                    final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
                     measurements = data['final_results']['measurements'][final_sweep_key]
                     
                     # Calculate energy density
@@ -338,8 +340,6 @@ def plot_energy_density_vs_sweeps(results_dir: str = "results",
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Fixed parameters
-    num_sweeps = 40
     single_qubit_noise = 0.0
     two_qubit_noise = 0.0
     
@@ -371,7 +371,7 @@ def plot_energy_density_vs_sweeps(results_dir: str = "results",
         
         # Find file using robust filename matching
         filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
-                                               num_sweeps, single_qubit_noise, two_qubit_noise, training_method)
+                                               MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
         
         if filepath:
             try:
@@ -384,7 +384,7 @@ def plot_energy_density_vs_sweeps(results_dir: str = "results",
                 total_errors = []
                 
                 # Collect data for each sweep (0 to num_sweeps)
-                for sweep in range(num_sweeps + 1):
+                for sweep in range(NUM_SWEEPS_STEADY_STATE + 1):
                     sweep_key = f"sweep_{sweep}"
                     if sweep_key in data['final_results']['measurements']:
                         measurements = data['final_results']['measurements'][sweep_key]
@@ -434,7 +434,7 @@ def plot_energy_density_vs_sweeps(results_dir: str = "results",
     ax.grid(True, alpha=0.3)
     
     # Set x-ticks to integers
-    ax.set_xticks(range(num_sweeps + 1))
+    ax.set_xticks(range(NUM_SWEEPS_STEADY_STATE + 1))
     
     # Save the plot
     plt.tight_layout()
@@ -483,6 +483,55 @@ def plot_energy_density_vs_system_size_two_panels(results_dir: str = "results",
     
     print("Creating two-panel energy density above ground state vs system size plot")
     
+    # First pass: collect all data to determine y-axis limits
+    all_energy_densities = []
+    
+    for J, h in J_h_combinations:
+        # Define system sizes to check (from cluster_job_generator_data_collection.py)
+        system_sizes = [(4, 2), (8, 4), (12, 6), (16, 8), (20, 10), (24, 12), (28, 14)]
+        single_qubit_noise = 0.0
+        two_qubit_noise = 0.0
+        
+        # Collect data for each training method and system size
+        for training_method in training_methods:
+            for system_qubits, bath_qubits in system_sizes:
+                filepath = find_variational_cooling_file(results_dir, system_qubits, bath_qubits, J, h, 
+                                                       MAX_NUM_SWEEPS, single_qubit_noise, two_qubit_noise, training_method)
+                
+                if filepath:
+                    try:
+                        # Load data
+                        with open(filepath, 'r') as f:
+                            data = json.load(f)
+                        
+                        # Get measurements from final sweep
+                        final_sweep_key = f"sweep_{NUM_SWEEPS_STEADY_STATE}"
+                        measurements = data['final_results']['measurements'][final_sweep_key]
+                        
+                        # Calculate energy density
+                        energy_density, total_err = calculate_energy_density(
+                            measurements, J, h, system_qubits
+                        )
+                        
+                        # Get ground state energy for this system size
+                        gs_filename = f"ground_state_data_sys{system_qubits}_J{J}_h{h}.json"
+                        gs_filepath = os.path.join(results_dir, gs_filename)
+                        
+                        if os.path.exists(gs_filepath):
+                            try:
+                                with open(gs_filepath, 'r') as f:
+                                    gs_data = json.load(f)
+                                ground_state_energy_density = gs_data['ground_state_results']['ground_state_energy'] / system_qubits
+                                
+                                # Calculate energy density above ground state
+                                energy_density_above_gs = energy_density - ground_state_energy_density
+                                all_energy_densities.append(energy_density_above_gs)
+                                
+                            except (json.JSONDecodeError, KeyError):
+                                continue
+                    except (json.JSONDecodeError, KeyError, FileNotFoundError):
+                        continue
+    
     # Plot each J,h combination
     for panel_idx, (J, h) in enumerate(J_h_combinations):
         ax = axes[panel_idx]
@@ -499,6 +548,13 @@ def plot_energy_density_vs_system_size_two_panels(results_dir: str = "results",
             ax.set_ylabel('Energy Density Above Ground State', fontsize=14)
         else:
             ax.set_ylabel('')  # Remove y-label from right panel
+    
+    # Set shared y-axis limits to start at 0 and cover all data
+    if all_energy_densities:
+        y_min = 0
+        y_max = max(all_energy_densities) * 1.05  # Add 5% padding at the top
+        ax1.set_ylim(y_min, y_max)
+        ax2.set_ylim(y_min, y_max)
     
     # Adjust layout
     plt.tight_layout()
